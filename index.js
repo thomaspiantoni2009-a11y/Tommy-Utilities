@@ -28,7 +28,7 @@ if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 if (!CLIENT_ID) throw new Error('CLIENT_ID mancante nel file .env');
 if (!MOD_LOG_CHANNEL_ID) throw new Error('MOD_LOG_CHANNEL_ID mancante nel file .env');
 
-// ==================== LOGGER MINIMALE ====================
+// ==================== LOGGER ====================
 const log = {
   info: (msg) => console.log(`\x1b[36m[INFO]\x1b[0m ${msg}`),
   ok: (msg) => console.log(`\x1b[32m[OK]\x1b[0m ${msg}`),
@@ -66,6 +66,24 @@ function extractUserId(input) {
   return null;
 }
 
+function extractChannelId(input) {
+  if (!input) return null;
+  const str = String(input).trim();
+  const m = str.match(/^<#(\d{17,20})>$/);
+  if (m) return m[1];
+  if (/^\d{17,20}$/.test(str)) return str;
+  return null;
+}
+
+function extractRoleId(input) {
+  if (!input) return null;
+  const str = String(input).trim();
+  const m = str.match(/^<@&(\d{17,20})>$/);
+  if (m) return m[1];
+  if (/^\d{17,20}$/.test(str)) return str;
+  return null;
+}
+
 function isTicketChannel(channel) {
   return typeof channel.name === 'string' && channel.name.startsWith('ticket-');
 }
@@ -79,7 +97,7 @@ function getPaginatedSlice(arr, page, perPage) {
   return arr.slice(start, start + perPage);
 }
 
-// ===== Cooldown con cleanup periodico =====
+// ===== Cooldown =====
 const cooldowns = new Map();
 setInterval(() => {
   const now = Date.now();
@@ -148,17 +166,21 @@ class EmbedManager {
   static warning(title, desc) { return this.createEmbed({ title, description: desc, color: 0xFFA500, timestamp: true }); }
 }
 
-// ==================== BOT INSTANCE (per CommandLogic) ====================
+// ==================== STORAGE ====================
 let clientRef = null;
 const storage = new StorageService(process.env.DB_PATH || './data/bot.db');
 
-// ==================== MOD LOG MODULE ====================
+// ==================== MOD LOG ====================
 const ModLogModule = {
   async logUserAction(guild, logData = {}) {
     storage.saveLog(logData);
     try {
       if (!guild) return;
-      const ch = guild.channels.cache.get(MOD_LOG_CHANNEL_ID);
+
+      // Log per-server se configurato, altrimenti fallback al globale
+      const config = storage.getGuildConfig(guild.id);
+      const channelId = config.log_channel_id || MOD_LOG_CHANNEL_ID;
+      const ch = guild.channels.cache.get(channelId);
       if (!ch) return;
 
       const fields = [
@@ -186,7 +208,7 @@ const ModLogModule = {
   }
 };
 
-// ==================== TICKET MODULE ====================
+// ==================== TICKET ====================
 const TICKET_COOLDOWN_MS = 5 * 60 * 1000;
 const CLOSE_DELAY_MS = 3000;
 const closingTickets = new Set();
@@ -358,7 +380,7 @@ async function closeTicket(source, user) {
   }
 }
 
-// ==================== LOBBY MODULE ====================
+// ==================== LOBBY ====================
 async function createLobby(interaction) {
   const user = interaction.user;
   const guild = interaction.guild;
@@ -431,7 +453,7 @@ async function createLobby(interaction) {
   }
 }
 
-// ==================== MODLOGS HANDLER ====================
+// ==================== MODLOGS ====================
 async function handleModlogs(source, target, isSlash) {
   if (!target) {
     return safeReplySource(source, {
@@ -516,30 +538,50 @@ async function handleModlogs(source, target, isSlash) {
   collector.on('end', async () => { try { await msg.edit({ components: [] }); } catch {} });
 }
 
-// ==================== BLACKLIST MODULE ====================
+// ==================== BLACKLIST ====================
 function isServerAuthorized(guildId) {
   if (BLACKLIST_ADMIN_SERVERS.length === 0) return true;
   return BLACKLIST_ADMIN_SERVERS.includes(guildId);
 }
 
 async function handleGuildMemberAdd(member) {
-  if (!storage.isBlacklisted(member.user.id)) return;
-  const entry = storage.getBlacklistEntry(member.user.id);
+  // 1) Blacklist check
+  if (storage.isBlacklisted(member.user.id)) {
+    const entry = storage.getBlacklistEntry(member.user.id);
+    try {
+      await member.send({
+        embeds: [EmbedManager.error('Accesso Negato', `Sei nella blacklist globale.\n**Motivo:** ${entry.reason}`)]
+      }).catch(() => {});
+      await member.kick(`[BLACKLIST GLOBALE] ${entry.reason}`);
+      await ModLogModule.logUserAction(member.guild, {
+        type: 'Blacklist Kick',
+        title: 'Blacklist Kick Automatico',
+        targetId: member.user.id,
+        target: `${member.user.username} (${member.user.id})`,
+        reason: entry.reason,
+        moderator: 'Sistema Automatico'
+      });
+      return; // non assegnare autorole a chi è stato kickato
+    } catch (err) {
+      log.err('handleGuildMemberAdd blacklist', err);
+    }
+  }
+
+  // 2) Autorole
   try {
-    await member.send({
-      embeds: [EmbedManager.error('Accesso Negato', `Sei nella blacklist globale.\n**Motivo:** ${entry.reason}`)]
-    }).catch(() => {});
-    await member.kick(`[BLACKLIST GLOBALE] ${entry.reason}`);
-    await ModLogModule.logUserAction(member.guild, {
-      type: 'Blacklist Kick',
-      title: 'Blacklist Kick Automatico',
-      targetId: member.user.id,
-      target: `${member.user.username} (${member.user.id})`,
-      reason: entry.reason,
-      moderator: 'Sistema Automatico'
-    });
+    const config = storage.getGuildConfig(member.guild.id);
+    if (config.autorole_id) {
+      const role = member.guild.roles.cache.get(config.autorole_id);
+      if (role) {
+        const botMember = member.guild.members.me;
+        if (botMember.permissions.has(PermissionsBitField.Flags.ManageRoles) &&
+            role.position < botMember.roles.highest.position) {
+          await member.roles.add(role, 'Auto-role all\'ingresso');
+        }
+      }
+    }
   } catch (err) {
-    log.err('handleGuildMemberAdd', err);
+    log.err('handleGuildMemberAdd autorole', err);
   }
 }
 
@@ -771,6 +813,283 @@ async function checkBlacklist(source, targetUser, isSlash) {
   }, isSlash);
 }
 
+// ==================== STATS ====================
+async function showStats(source, isSlash) {
+  const s = storage.getStats();
+  const typeLines = s.byType.length
+    ? s.byType.map(t => `• **${t.type}**: ${t.c}`).join('\n')
+    : 'Nessuna azione registrata';
+
+  const embed = EmbedManager.createEmbed({
+    title: '📊 Statistiche Bot',
+    color: 0x5865F2,
+    fields: [
+      { name: 'Log Totali', value: `${s.total}`, inline: true },
+      { name: 'Blacklist', value: `${s.blacklist}`, inline: true },
+      { name: 'Server', value: `${clientRef.guilds.cache.size}`, inline: true },
+      { name: 'Azioni per Tipo', value: typeLines, inline: false }
+    ],
+    timestamp: true
+  });
+  return safeReplySource(source, { embeds: [embed], ephemeral: isSlash }, isSlash);
+}
+
+// ==================== PURGE ====================
+async function purgeUser(source, targetUser, amount, executor, isSlash) {
+  if (!executor.permissions.has(PermissionsBitField.Flags.ManageMessages)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Accesso Negato', 'Non hai il permesso "Gestisci Messaggi".')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  const channel = source.channel;
+  const botMember = channel.guild.members.me;
+  if (!channel.permissionsFor(botMember).has(PermissionsBitField.Flags.ManageMessages)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Permessi', 'Il bot non può gestire i messaggi qui.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  amount = Math.min(Math.max(amount || 100, 1), 100);
+
+  try {
+    // Fetch degli ultimi 100 messaggi (limite Discord per bulkDelete)
+    const messages = await channel.messages.fetch({ limit: 100 });
+    const toDelete = messages
+      .filter(m => m.author.id === targetUser.id)
+      .first(amount);
+
+    if (!toDelete.length) {
+      return safeReplySource(source, {
+        embeds: [EmbedManager.info('Nessun messaggio', `Nessun messaggio recente di ${targetUser.username} trovato in questo canale.`)],
+        ephemeral: isSlash
+      }, isSlash);
+    }
+
+    const deleted = await channel.bulkDelete(toDelete, true);
+
+    await ModLogModule.logUserAction(channel.guild, {
+      type: 'Purge',
+      title: 'Purge Messaggi',
+      targetId: targetUser.id,
+      target: `${targetUser.username} (${targetUser.id})`,
+      moderator: `${executor.user ? executor.user.tag : executor.username} (${executor.id})`,
+      channel: channel.name,
+      reason: `Cancellati ${deleted.size} messaggi`
+    });
+
+    return safeReplySource(source, {
+      embeds: [EmbedManager.success('Purge Completato', `🧹 Cancellati **${deleted.size}** messaggi di ${targetUser.username} in ${channel}.`)],
+      ephemeral: isSlash
+    }, isSlash);
+  } catch (err) {
+    if (err.code === 50034) {
+      return safeReplySource(source, {
+        embeds: [EmbedManager.error('Errore', 'Non posso cancellare messaggi più vecchi di 14 giorni.')],
+        ephemeral: isSlash
+      }, isSlash);
+    }
+    log.err('purgeUser', err);
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Errore', 'Errore durante la cancellazione.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+}
+
+// ==================== NOTE ====================
+async function addNote(source, targetUser, content, author, isSlash) {
+  if (!author.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  if (!content || content.trim().length < 2) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Errore', 'Il contenuto della nota è troppo corto.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  if (content.length > 1000) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Troppo lunga', 'Max 1000 caratteri.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  const guildId = source.guild.id;
+  const noteId = storage.addNote(
+    guildId, targetUser.id,
+    author.id, author.user ? author.user.tag : author.username,
+    content.trim()
+  );
+
+  await ModLogModule.logUserAction(source.guild, {
+    type: 'Nota Aggiunta',
+    title: 'Nota Staff',
+    targetId: targetUser.id,
+    target: `${targetUser.username} (${targetUser.id})`,
+    moderator: `${author.user ? author.user.tag : author.username} (${author.id})`,
+    reason: content.slice(0, 500)
+  });
+
+  return safeReplySource(source, {
+    embeds: [EmbedManager.success('Nota Aggiunta', `Nota **#${noteId}** aggiunta per ${targetUser.username}.`)],
+    ephemeral: isSlash
+  }, isSlash);
+}
+
+async function listNotes(source, targetUser, isSlash) {
+  const guildId = source.guild.id;
+  const notes = storage.getNotesForUser(guildId, targetUser.id);
+
+  if (!notes.length) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.info('Nessuna Nota', `Nessuna nota per ${targetUser.username}.`)],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  const PER_PAGE = 5;
+  const totalPages = calculatePages(notes.length, PER_PAGE);
+  let page = 0;
+
+  const buildEmbed = (p) => {
+    const slice = getPaginatedSlice(notes, p, PER_PAGE);
+    const fields = slice.map(n => ({
+      name: `#${n.id} — ${n.author_tag}`,
+      value: `${n.content}\n*${formatDate(n.created_at)}*`,
+      inline: false
+    }));
+    return EmbedManager.createEmbed({
+      title: `📝 Note - ${targetUser.username}`,
+      color: 0x9B59B6,
+      fields,
+      footer: { text: `Pagina ${p + 1}/${totalPages} | Totale: ${notes.length}` },
+      timestamp: true
+    });
+  };
+
+  const buildRow = (p) => new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('notes_prev').setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(p === 0),
+    new ButtonBuilder().setCustomId('notes_next').setLabel('▶').setStyle(ButtonStyle.Secondary).setDisabled(p === totalPages - 1)
+  );
+
+  let msg;
+  const data = { embeds: [buildEmbed(0)], components: totalPages > 1 ? [buildRow(0)] : [] };
+  if (isSlash) {
+    await source.reply({ ...data, ephemeral: false });
+    msg = await source.fetchReply();
+  } else {
+    msg = await source.channel.send(data);
+  }
+
+  if (totalPages <= 1) return;
+
+  const authorId = isSlash ? source.user.id : source.author.id;
+  const collector = msg.createMessageComponentCollector({ time: 60000 });
+  collector.on('collect', async btn => {
+    if (btn.user.id !== authorId) {
+      return btn.reply({ embeds: [EmbedManager.error('Non Autorizzato', 'Non puoi usare questi bottoni.')], ephemeral: true });
+    }
+    if (btn.customId === 'notes_prev') page = Math.max(0, page - 1);
+    if (btn.customId === 'notes_next') page = Math.min(totalPages - 1, page + 1);
+    await btn.update({ embeds: [buildEmbed(page)], components: [buildRow(page)] }).catch(() => {});
+  });
+  collector.on('end', async () => { try { await msg.edit({ components: [] }); } catch {} });
+}
+
+async function removeNote(source, noteId, executor, isSlash) {
+  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  const guildId = source.guild.id;
+  const note = storage.getNote(guildId, noteId);
+  if (!note) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Non Trovata', `Nessuna nota con ID #${noteId}.`)],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  storage.deleteNote(guildId, noteId);
+  return safeReplySource(source, {
+    embeds: [EmbedManager.success('Nota Eliminata', `Nota **#${noteId}** eliminata.`)],
+    ephemeral: isSlash
+  }, isSlash);
+}
+
+// ==================== AUTOROLE ====================
+async function setAutorole(source, role, executor, isSlash) {
+  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  const botMember = source.guild.members.me;
+  if (!botMember.permissions.has(PermissionsBitField.Flags.ManageRoles)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Permessi', 'Il bot non ha il permesso "Gestisci Ruoli".')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  if (role.position >= botMember.roles.highest.position) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Errore', 'Il ruolo è più alto o uguale al ruolo più alto del bot.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+
+  storage.setAutorole(source.guild.id, role.id);
+  return safeReplySource(source, {
+    embeds: [EmbedManager.success('Autorole Impostato', `I nuovi membri riceveranno automaticamente il ruolo ${role}.`)],
+    ephemeral: isSlash
+  }, isSlash);
+}
+
+async function clearAutorole(source, executor, isSlash) {
+  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+    return safeReplySource(source, {
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      ephemeral: isSlash
+    }, isSlash);
+  }
+  storage.clearAutorole(source.guild.id);
+  return safeReplySource(source, {
+    embeds: [EmbedManager.success('Autorole Rimosso', 'Nessun ruolo verrà più assegnato automaticamente.')],
+    ephemeral: isSlash
+  }, isSlash);
+}
+
+// ==================== HELP ====================
+function buildHelpEmbed() {
+  return new EmbedBuilder()
+    .setTitle('📋 Comandi Disponibili')
+    .setDescription('**Slash commands** (consigliati) e **prefissi** `-` o `&`')
+    .setColor('#0099ff')
+    .addFields(
+      { name: '🎫 Ticket', value: '`/ticketpanel` `/ticket` `/close`', inline: true },
+      { name: '🛡️ Moderazione', value: '`/warn` `/timeout` `/modlogs` `/kick` `/ban` `/unban` `/clear`', inline: true },
+      { name: '🧹 Purge', value: '`/purge`', inline: true },
+      { name: '🚫 Blacklist', value: '`/blacklist add|remove|list|check`', inline: true },
+      { name: '📝 Note', value: '`/note add|list|remove`', inline: true },
+      { name: '⚙️ Config', value: '`/autorole set|clear`', inline: true },
+      { name: '👤 Utente', value: '`/userinfo` `/roles` `/stats`', inline: true },
+      { name: '📨 Inviti & Ruoli', value: '`/invite` `/giverole` `/removerole`', inline: true },
+      { name: '🔒 Canali', value: '`/lock` `/unlock`', inline: true },
+      { name: '🎮 Lobby', value: '`/dashboard`', inline: true },
+      { name: '🔧 Custom', value: '`/addcmd` `/delcmd`', inline: true }
+    )
+    .setFooter({ text: 'Usa /help per rivedere questo messaggio' });
+}
+
 // ==================== COMMAND LOGIC ====================
 const CommandLogic = {
   async getUserFromId(guild, userId) {
@@ -793,7 +1112,7 @@ const CommandLogic = {
     if (member.id === botMember.id)
       return { success: false, message: '❌ Non posso espellere me stesso!' };
     if (member.roles.highest.position >= botMember.roles.highest.position)
-      return { success: false, message: '❌ Non posso espellere un utente con un ruolo più alto o uguale al mio!' };
+      return { success: false, message: '❌ Non posso espellere un utente con ruolo più alto!' };
 
     await member.kick(reason);
     return { success: true, message: `✅ Utente ${member.user.tag} (${targetId}) è stato espulso. Motivo: ${reason}` };
@@ -813,7 +1132,7 @@ const CommandLogic = {
 
     const member = await this.getUserFromId(guild, targetId);
     if (member && !member.bannable)
-      return { success: false, message: '❌ Non posso bannare questo utente (ruolo troppo alto o mancano permessi)!' };
+      return { success: false, message: '❌ Non posso bannare questo utente!' };
 
     await guild.members.ban(targetId, { reason });
     return { success: true, message: `✅ Utente con ID ${targetId} è stato bannato. Motivo: ${reason}` };
@@ -848,7 +1167,7 @@ const CommandLogic = {
 
     const botMember = channel.guild.members.me;
     if (!channel.permissionsFor(botMember).has(PermissionsBitField.Flags.ManageMessages))
-      return { success: false, message: '❌ Non ho il permesso di gestire i messaggi in questo canale!' };
+      return { success: false, message: '❌ Non ho il permesso di gestire i messaggi!' };
 
     try {
       const deleted = await channel.bulkDelete(amount, true);
@@ -1012,30 +1331,94 @@ const CommandLogic = {
 
 // ==================== SLASH COMMANDS ====================
 const slashCommands = [
+  // Utility
+  new SlashCommandBuilder().setName('help').setDescription('Mostra la lista dei comandi'),
+  new SlashCommandBuilder().setName('stats').setDescription('Mostra le statistiche del bot'),
+
+  // Ticket
   new SlashCommandBuilder().setName('ticketpanel').setDescription('Crea il pannello ticket'),
   new SlashCommandBuilder().setName('ticket').setDescription('Apre un ticket'),
   new SlashCommandBuilder().setName('close').setDescription('Chiude il ticket corrente'),
-  new SlashCommandBuilder().setName('userinfo').setDescription('Mostra info utente').addUserOption(o => o.setName('utente').setDescription('Utente')),
-  new SlashCommandBuilder().setName('warn').setDescription('Warna un utente').addUserOption(o => o.setName('utente').setRequired(true)).addStringOption(o => o.setName('motivo').setDescription('Motivo')),
-  new SlashCommandBuilder().setName('timeout').setDescription('Timeout utente').addUserOption(o => o.setName('utente').setRequired(true)).addIntegerOption(o => o.setName('secondi').setRequired(true).setDescription('Durata (1-2419200)')).addStringOption(o => o.setName('motivo').setDescription('Motivo')),
-  new SlashCommandBuilder().setName('modlogs').setDescription('Mostra log moderazione').addUserOption(o => o.setName('utente').setRequired(true)),
-  new SlashCommandBuilder().setName('addcmd').setDescription('Aggiunge comando custom').addStringOption(o => o.setName('nome').setRequired(true)).addStringOption(o => o.setName('risposta').setRequired(true)),
-  new SlashCommandBuilder().setName('delcmd').setDescription('Elimina comando custom').addStringOption(o => o.setName('nome').setRequired(true)),
-  new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard'),
-  new SlashCommandBuilder().setName('blacklist').setDescription('Gestione blacklist')
-    .addSubcommand(s => s.setName('add').setDescription('Aggiungi').addUserOption(o => o.setName('utente').setRequired(true)).addStringOption(o => o.setName('motivo')))
-    .addSubcommand(s => s.setName('remove').setDescription('Rimuovi').addUserOption(o => o.setName('utente').setRequired(true)))
-    .addSubcommand(s => s.setName('list').setDescription('Lista'))
-    .addSubcommand(s => s.setName('check').setDescription('Controlla').addUserOption(o => o.setName('utente').setRequired(true))),
-  new SlashCommandBuilder().setName('kick').setDescription('Espelle un utente').addUserOption(o => o.setName('utente').setRequired(true)).addStringOption(o => o.setName('motivo').setDescription('Motivo')),
-  new SlashCommandBuilder().setName('ban').setDescription('Banna un utente').addUserOption(o => o.setName('utente').setRequired(true)).addStringOption(o => o.setName('motivo').setDescription('Motivo')),
-  new SlashCommandBuilder().setName('unban').setDescription('Sbanna un utente').addStringOption(o => o.setName('id').setRequired(true).setDescription('ID utente')),
-  new SlashCommandBuilder().setName('clear').setDescription('Cancella messaggi').addIntegerOption(o => o.setName('quantita').setRequired(true).setDescription('1-100')),
-  new SlashCommandBuilder().setName('invite').setDescription('Invia un invito (1 uso, 60 min)').addUserOption(o => o.setName('utente').setRequired(true)),
-  new SlashCommandBuilder().setName('giverole').setDescription('Assegna un ruolo').addUserOption(o => o.setName('utente').setRequired(true)).addRoleOption(o => o.setName('ruolo').setRequired(true)),
-  new SlashCommandBuilder().setName('removerole').setDescription('Rimuove un ruolo').addUserOption(o => o.setName('utente').setRequired(true)).addRoleOption(o => o.setName('ruolo').setRequired(true)),
+
+  // Utente
+  new SlashCommandBuilder().setName('userinfo').setDescription('Mostra info utente')
+    .addUserOption(o => o.setName('utente').setDescription('Utente')),
   new SlashCommandBuilder().setName('roles').setDescription('Lista ruoli del server'),
-  new SlashCommandBuilder().setName('lock').setDescription('Blocca il canale').addStringOption(o => o.setName('motivo').setDescription('Motivo')),
+
+  // Moderazione
+  new SlashCommandBuilder().setName('warn').setDescription('Warna un utente')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
+  new SlashCommandBuilder().setName('timeout').setDescription('Timeout utente')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addIntegerOption(o => o.setName('secondi').setRequired(true).setDescription('Durata (1-2419200)'))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
+  new SlashCommandBuilder().setName('kick').setDescription('Espelle un utente')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
+  new SlashCommandBuilder().setName('ban').setDescription('Banna un utente')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
+  new SlashCommandBuilder().setName('unban').setDescription('Sbanna un utente')
+    .addStringOption(o => o.setName('id').setRequired(true).setDescription('ID utente')),
+  new SlashCommandBuilder().setName('clear').setDescription('Cancella messaggi')
+    .addIntegerOption(o => o.setName('quantita').setRequired(true).setDescription('1-100')),
+  new SlashCommandBuilder().setName('purge').setDescription('Cancella i messaggi di un utente nel canale')
+    .addUserOption(o => o.setName('utente').setRequired(true).setDescription('Utente di cui cancellare i messaggi'))
+    .addIntegerOption(o => o.setName('quantita').setDescription('Numero max messaggi (1-100, default 100)')),
+  new SlashCommandBuilder().setName('modlogs').setDescription('Mostra log moderazione')
+    .addUserOption(o => o.setName('utente').setRequired(true)),
+
+  // Blacklist
+  new SlashCommandBuilder().setName('blacklist').setDescription('Gestione blacklist globale')
+    .addSubcommand(s => s.setName('add').setDescription('Aggiungi alla blacklist')
+      .addUserOption(o => o.setName('utente').setRequired(true))
+      .addStringOption(o => o.setName('motivo')))
+    .addSubcommand(s => s.setName('remove').setDescription('Rimuovi dalla blacklist')
+      .addUserOption(o => o.setName('utente').setRequired(true)))
+    .addSubcommand(s => s.setName('list').setDescription('Mostra la lista'))
+    .addSubcommand(s => s.setName('check').setDescription('Controlla un utente')
+      .addUserOption(o => o.setName('utente').setRequired(true))),
+
+  // Note
+  new SlashCommandBuilder().setName('note').setDescription('Gestione note staff')
+    .addSubcommand(s => s.setName('add').setDescription('Aggiungi una nota')
+      .addUserOption(o => o.setName('utente').setRequired(true))
+      .addStringOption(o => o.setName('testo').setRequired(true).setDescription('Contenuto nota')))
+    .addSubcommand(s => s.setName('list').setDescription('Lista note di un utente')
+      .addUserOption(o => o.setName('utente').setRequired(true)))
+    .addSubcommand(s => s.setName('remove').setDescription('Rimuovi una nota')
+      .addIntegerOption(o => o.setName('id').setRequired(true).setDescription('ID nota'))),
+
+  // Autorole
+  new SlashCommandBuilder().setName('autorole').setDescription('Configura il ruolo automatico all\'ingresso')
+    .addSubcommand(s => s.setName('set').setDescription('Imposta il ruolo automatico')
+      .addRoleOption(o => o.setName('ruolo').setRequired(true)))
+    .addSubcommand(s => s.setName('clear').setDescription('Rimuovi il ruolo automatico')),
+
+  // Custom
+  new SlashCommandBuilder().setName('addcmd').setDescription('Aggiunge comando custom')
+    .addStringOption(o => o.setName('nome').setRequired(true))
+    .addStringOption(o => o.setName('risposta').setRequired(true)),
+  new SlashCommandBuilder().setName('delcmd').setDescription('Elimina comando custom')
+    .addStringOption(o => o.setName('nome').setRequired(true)),
+
+  // Lobby / Dashboard
+  new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard (crea lobby)'),
+
+  // Inviti & Ruoli
+  new SlashCommandBuilder().setName('invite').setDescription('Invia un invito (1 uso, 60 min)')
+    .addUserOption(o => o.setName('utente').setRequired(true)),
+  new SlashCommandBuilder().setName('giverole').setDescription('Assegna un ruolo')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addRoleOption(o => o.setName('ruolo').setRequired(true)),
+  new SlashCommandBuilder().setName('removerole').setDescription('Rimuove un ruolo')
+    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addRoleOption(o => o.setName('ruolo').setRequired(true)),
+
+  // Canali
+  new SlashCommandBuilder().setName('lock').setDescription('Blocca il canale')
+    .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('unlock').setDescription('Sblocca il canale')
 ];
 
@@ -1044,7 +1427,7 @@ async function registerSlashCommands(clientId, token) {
   try {
     log.info('Registrazione comandi slash...');
     await rest.put(Routes.applicationCommands(clientId), { body: slashCommands.map(c => c.toJSON()) });
-    log.ok('Comandi slash registrati!');
+    log.ok(`Comandi slash registrati (${slashCommands.length})!`);
   } catch (err) {
     log.err('Registrazione comandi', err);
   }
@@ -1084,13 +1467,22 @@ async function handlePrefixCommand(message) {
 
   const cd = checkCooldown(member.id, commandName);
   if (cd.onCooldown) {
-    return message.reply({ content: `⏳ Aspetta ${cd.remaining}s prima di usare di nuovo questo comando.`, allowedMentions: { repliedUser: false } });
+    return message.reply({ content: `⏳ Aspetta ${cd.remaining}s prima di riusare questo comando.`, allowedMentions: { repliedUser: false } });
   }
 
   const replyMethod = async (r) => message.reply({ content: r.message, allowedMentions: { repliedUser: false } });
 
   try {
     switch (commandName) {
+      // ===== UTILITY =====
+      case 'help':
+        return channel.send({ embeds: [buildHelpEmbed()] });
+      case 'stats': {
+        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        return showStats(message, false);
+      }
+
       // ===== MODERAZIONE =====
       case 'kick': {
         if (!args[0]) return message.reply('❌ Uso: `-kick <id o @utente> [motivo]`');
@@ -1108,6 +1500,15 @@ async function handlePrefixCommand(message) {
         const amount = parseInt(args[0]);
         if (isNaN(amount)) return message.reply('❌ Uso: `-clear <1-100>`');
         return replyMethod(await CommandLogic.clear(channel, member, amount));
+      }
+      case 'purge': {
+        if (!args[0]) return message.reply('❌ Uso: `-purge <@utente o ID> [quantità]`');
+        const id = extractUserId(args[0]);
+        if (!id) return message.reply('❌ ID utente non valido!');
+        let target;
+        try { target = await client.users.fetch(id); } catch { return message.reply('❌ Utente non trovato.'); }
+        const amount = parseInt(args[1]) || 100;
+        return purgeUser(message, target, amount, member, false);
       }
       case 'invite': {
         if (!args[0]) return message.reply('❌ Uso: `-invite <id o @utente>`');
@@ -1133,22 +1534,6 @@ async function handlePrefixCommand(message) {
       }
 
       // ===== TICKET =====
-      case 'help': {
-        const helpEmbed = new EmbedBuilder()
-          .setTitle('📋 Comandi Disponibili')
-          .setDescription('**Prefissi:** `-` o `&`')
-          .setColor('#0099ff')
-          .addFields(
-            { name: '🎫 Ticket', value: '`-ticket`, `-close`, `-ticketpanel`', inline: true },
-            { name: '🛡️ Moderazione', value: '`-warn`, `-timeout`, `-modlogs`', inline: true },
-            { name: '🚫 Blacklist', value: '`-bl add/remove/list/check`', inline: true },
-            { name: '📝 Custom', value: '`-addcmd`, `-delcmd`', inline: true },
-            { name: '👢 Base', value: '`-kick`, `-ban`, `-unban`, `-clear`', inline: true },
-            { name: '📨 Inviti/Ruoli', value: '`-invite`, `-giverole`, `-removerole`, `-roles`', inline: true },
-            { name: '🔒 Canali', value: '`-lock`, `-unlock`', inline: true }
-          );
-        return channel.send({ embeds: [helpEmbed] });
-      }
       case 'addcmd': {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
@@ -1336,6 +1721,69 @@ async function handlePrefixCommand(message) {
           ].join('\n'))]
         });
       }
+
+      // ===== NOTE =====
+      case 'note':
+      case 'notes': {
+        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        const sub = args.shift()?.toLowerCase();
+        if (sub === 'add') {
+          if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note add <@utente o ID> <testo>`')] });
+          const id = extractUserId(args[0]);
+          if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
+          let target;
+          try { target = await client.users.fetch(id); }
+          catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non trovato.')] }); }
+          const content = args.slice(1).join(' ');
+          return addNote(message, target, content, member, false);
+        }
+        if (sub === 'list') {
+          if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note list <@utente o ID>`')] });
+          const id = extractUserId(args[0]);
+          if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
+          let target;
+          try { target = await client.users.fetch(id); }
+          catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non trovato.')] }); }
+          return listNotes(message, target, false);
+        }
+        if (sub === 'remove' || sub === 'rm') {
+          const noteId = parseInt(args[0]);
+          if (isNaN(noteId)) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note remove <id_nota>`')] });
+          return removeNote(message, noteId, member, false);
+        }
+        return message.reply({
+          embeds: [EmbedManager.info('Note', [
+            '`-note add <@utente o ID> <testo>`',
+            '`-note list <@utente o ID>`',
+            '`-note remove <id_nota>`'
+          ].join('\n'))]
+        });
+      }
+
+      // ===== AUTOROLE =====
+      case 'autorole': {
+        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        const sub = args.shift()?.toLowerCase();
+        if (sub === 'set') {
+          if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-autorole set <@ruolo o ID>`')] });
+          const roleId = extractRoleId(args[0]);
+          if (!roleId) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
+          const role = guild.roles.cache.get(roleId);
+          if (!role) return message.reply({ embeds: [EmbedManager.error('Errore', 'Ruolo non trovato.')] });
+          return setAutorole(message, role, member, false);
+        }
+        if (sub === 'clear' || sub === 'off') {
+          return clearAutorole(message, member, false);
+        }
+        return message.reply({
+          embeds: [EmbedManager.info('Autorole', [
+            '`-autorole set <@ruolo o ID>` — Imposta il ruolo automatico',
+            '`-autorole clear` — Rimuovi il ruolo automatico'
+          ].join('\n'))]
+        });
+      }
     }
   } catch (err) {
     log.err('handlePrefixCommand', err);
@@ -1348,6 +1796,14 @@ async function handleSlashCommand(interaction) {
   const { commandName, member, guild } = interaction;
 
   switch (commandName) {
+    case 'help':
+      return interaction.reply({ embeds: [buildHelpEmbed()] });
+
+    case 'stats':
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      return showStats(interaction, true);
+
     case 'ticketpanel': {
       if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')], ephemeral: true });
@@ -1377,6 +1833,12 @@ async function handleSlashCommand(interaction) {
           )]
       });
     }
+
+    case 'roles': {
+      const res = await CommandLogic.listRoles(guild);
+      return interaction.reply({ content: res.message, ephemeral: true });
+    }
+
     case 'warn': {
       if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
@@ -1399,6 +1861,7 @@ async function handleSlashCommand(interaction) {
         )]
       });
     }
+
     case 'timeout': {
       if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
@@ -1435,49 +1898,7 @@ async function handleSlashCommand(interaction) {
         })]
       });
     }
-    case 'modlogs': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
-      return handleModlogs(interaction, interaction.options.getUser('utente'), true);
-    }
-    case 'addcmd': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
-      const name = interaction.options.getString('nome').toLowerCase();
-      const resp = interaction.options.getString('risposta');
-      if (resp.length > 4096) return safeReply(interaction, { embeds: [EmbedManager.error('Troppo lungo', 'Max 4096.')], ephemeral: true });
-      storage.saveCommand(name, resp);
-      return interaction.reply({ embeds: [EmbedManager.success('Comando Aggiunto', `"${name}" salvato.`)], ephemeral: true });
-    }
-    case 'delcmd': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
-      const name = interaction.options.getString('nome').toLowerCase();
-      if (!storage.deleteCommand(name))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)], ephemeral: true });
-      return interaction.reply({ embeds: [EmbedManager.success('Comando Eliminato', `"${name}" rimosso.`)], ephemeral: true });
-    }
-    case 'dashboard': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')], ephemeral: true });
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('create_lobby').setLabel('Crea Lobby').setStyle(ButtonStyle.Primary)
-      );
-      return interaction.reply({
-        embeds: [EmbedManager.info('Crea Lobby', 'Clicca per creare una lobby privata.')],
-        components: [row]
-      });
-    }
-    case 'blacklist': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
-      const sub = interaction.options.getSubcommand();
-      if (sub === 'add') return addBlacklist(interaction, interaction.options.getUser('utente'), interaction.options.getString('motivo') || 'Nessun motivo specificato', interaction.user, true);
-      if (sub === 'remove') return removeBlacklist(interaction, interaction.options.getUser('utente'), interaction.user, true);
-      if (sub === 'list') return listBlacklist(interaction, true);
-      if (sub === 'check') return checkBlacklist(interaction, interaction.options.getUser('utente'), true);
-      break;
-    }
+
     case 'kick': {
       if (!member.permissions.has(PermissionsBitField.Flags.KickMembers))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Espelli Membri".')], ephemeral: true });
@@ -1509,10 +1930,94 @@ async function handleSlashCommand(interaction) {
       if (res.success) setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
       return;
     }
+    case 'purge': {
+      const u = interaction.options.getUser('utente');
+      const amount = interaction.options.getInteger('quantita') || 100;
+      return purgeUser(interaction, u, amount, member, true);
+    }
+    case 'modlogs': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      return handleModlogs(interaction, interaction.options.getUser('utente'), true);
+    }
+
+    case 'addcmd': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      const name = interaction.options.getString('nome').toLowerCase();
+      const resp = interaction.options.getString('risposta');
+      if (resp.length > 4096) return safeReply(interaction, { embeds: [EmbedManager.error('Troppo lungo', 'Max 4096.')], ephemeral: true });
+      storage.saveCommand(name, resp);
+      return interaction.reply({ embeds: [EmbedManager.success('Comando Aggiunto', `"${name}" salvato.`)], ephemeral: true });
+    }
+    case 'delcmd': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      const name = interaction.options.getString('nome').toLowerCase();
+      if (!storage.deleteCommand(name))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)], ephemeral: true });
+      return interaction.reply({ embeds: [EmbedManager.success('Comando Eliminato', `"${name}" rimosso.`)], ephemeral: true });
+    }
+
+    case 'dashboard': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')], ephemeral: true });
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('create_lobby').setLabel('Crea Lobby').setStyle(ButtonStyle.Primary)
+      );
+      return interaction.reply({
+        embeds: [EmbedManager.info('Crea Lobby', 'Clicca per creare una lobby privata.')],
+        components: [row]
+      });
+    }
+
+    case 'blacklist': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'add') return addBlacklist(interaction, interaction.options.getUser('utente'), interaction.options.getString('motivo') || 'Nessun motivo specificato', interaction.user, true);
+      if (sub === 'remove') return removeBlacklist(interaction, interaction.options.getUser('utente'), interaction.user, true);
+      if (sub === 'list') return listBlacklist(interaction, true);
+      if (sub === 'check') return checkBlacklist(interaction, interaction.options.getUser('utente'), true);
+      break;
+    }
+
+    case 'note': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'add') {
+        return addNote(
+          interaction,
+          interaction.options.getUser('utente'),
+          interaction.options.getString('testo'),
+          member,
+          true
+        );
+      }
+      if (sub === 'list') {
+        return listNotes(interaction, interaction.options.getUser('utente'), true);
+      }
+      if (sub === 'remove') {
+        return removeNote(interaction, interaction.options.getInteger('id'), member, true);
+      }
+      break;
+    }
+
+    case 'autorole': {
+      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      const sub = interaction.options.getSubcommand();
+      if (sub === 'set') return setAutorole(interaction, interaction.options.getRole('ruolo'), member, true);
+      if (sub === 'clear') return clearAutorole(interaction, member, true);
+      break;
+    }
+
     case 'invite': {
       const u = interaction.options.getUser('utente');
       return CommandLogic.invite(interaction, guild, member, u.id, async (r) => interaction.reply({ content: r.message, ephemeral: !r.success }));
     }
+
     case 'giverole': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageRoles))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Gestisci Ruoli".')], ephemeral: true });
@@ -1529,10 +2034,7 @@ async function handleSlashCommand(interaction) {
       const res = await CommandLogic.removeRole(guild, member, u.id, role.id);
       return interaction.reply({ content: res.message, ephemeral: !res.success });
     }
-    case 'roles': {
-      const res = await CommandLogic.listRoles(guild);
-      return interaction.reply({ content: res.message, ephemeral: true });
-    }
+
     case 'lock': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageChannels))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Gestisci Canali".')], ephemeral: true });
@@ -1558,8 +2060,8 @@ async function handleButton(interaction) {
 // ==================== EVENTS ====================
 client.once(Events.ClientReady, () => {
   log.ok(`Bot online come ${client.user.tag}`);
-  log.info(`Slash: /ticket /close /warn /timeout /userinfo /modlogs /blacklist /addcmd /delcmd /dashboard /ticketpanel /kick /ban /unban /clear /invite /giverole /removerole /roles /lock /unlock`);
-  log.info(`Prefix: - & (es. -help, -ticket, -warn @user, -bl add <id>)`);
+  log.info(`Slash commands registrati: ${slashCommands.length}`);
+  log.info(`Prefix: - & (es. -help, -ticket, -warn @user)`);
 });
 
 client.on(Events.InteractionCreate, async (interaction) => {
@@ -1592,7 +2094,6 @@ process.on('uncaughtException', (err) => log.err('uncaughtException', err));
   }
 })();
 
-// Cleanup alla chiusura
 process.on('SIGINT', () => {
   log.warn('Shutdown...');
   storage.close();
