@@ -23,7 +23,6 @@ const CLIENT_ID = (process.env.CLIENT_ID || '').trim();
 const MOD_LOG_CHANNEL_ID = (process.env.MOD_LOG_CHANNEL_ID || '').trim();
 const BLACKLIST_ADMIN_SERVERS = (process.env.BLACKLIST_ADMIN_SERVERS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
-// Opzionale: per registrazione ISTANTANEA su un server specifico
 const GUILD_ID = (process.env.GUILD_ID || '').trim();
 
 if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
@@ -57,6 +56,22 @@ function getRoles(member, guild) {
     .filter(r => r.id !== guild.id)
     .map(r => r.toString())
     .join(', ') || 'Nessuno';
+}
+
+// ===== Verifica permessi staff/admin =====
+const STAFF_ROLES = ['Staff', 'Admin', 'Senior Admin'];
+const ADMIN_ROLES = ['Admin', 'Senior Admin'];
+
+function hasStaffOrAdmin(member) {
+  if (!member) return false;
+  if (member.permissions?.has(PermissionsBitField.Flags.Administrator)) return true;
+  return member.roles?.cache?.some(r => STAFF_ROLES.includes(r.name)) ?? false;
+}
+
+function isAdmin(member) {
+  if (!member) return false;
+  if (member.permissions?.has(PermissionsBitField.Flags.Administrator)) return true;
+  return member.roles?.cache?.some(r => ADMIN_ROLES.includes(r.name)) ?? false;
 }
 
 function extractUserId(input) {
@@ -323,11 +338,11 @@ async function closeTicket(source, user) {
 
   const ticketUserId = channel.name.replace('ticket-', '');
   const isOwner = user.id === ticketUserId;
-  const isAdmin = source.member?.permissions.has(PermissionsBitField.Flags.Administrator);
+  const isStaffOrAdmin = source.member ? hasStaffOrAdmin(source.member) : false;
 
-  if (!isOwner && !isAdmin) {
+  if (!isOwner && !isStaffOrAdmin) {
     return safeReplySource(source, {
-      embeds: [EmbedManager.error('Accesso Negato', "Solo l'autore del ticket o un admin possono chiuderlo.")],
+      embeds: [EmbedManager.error('Accesso Negato', "Solo l'autore del ticket o uno staff possono chiuderlo.")],
       ephemeral: true
     }, isSlash);
   }
@@ -889,9 +904,9 @@ async function purgeUser(source, targetUser, amount, executor, isSlash) {
 
 // ==================== NOTE ====================
 async function addNote(source, targetUser, content, author, isSlash) {
-  if (!author.permissions.has(PermissionsBitField.Flags.Administrator)) {
+  if (!hasStaffOrAdmin(author)) {
     return safeReplySource(source, {
-      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')],
       ephemeral: isSlash
     }, isSlash);
   }
@@ -991,9 +1006,9 @@ async function listNotes(source, targetUser, isSlash) {
 }
 
 async function removeNote(source, noteId, executor, isSlash) {
-  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+  if (!isAdmin(executor)) {
     return safeReplySource(source, {
-      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')],
       ephemeral: isSlash
     }, isSlash);
   }
@@ -1014,9 +1029,9 @@ async function removeNote(source, noteId, executor, isSlash) {
 
 // ==================== AUTOROLE ====================
 async function setAutorole(source, role, executor, isSlash) {
-  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+  if (!isAdmin(executor)) {
     return safeReplySource(source, {
-      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')],
       ephemeral: isSlash
     }, isSlash);
   }
@@ -1043,9 +1058,9 @@ async function setAutorole(source, role, executor, isSlash) {
 }
 
 async function clearAutorole(source, executor, isSlash) {
-  if (!executor.permissions.has(PermissionsBitField.Flags.Administrator)) {
+  if (!isAdmin(executor)) {
     return safeReplySource(source, {
-      embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')],
+      embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')],
       ephemeral: isSlash
     }, isSlash);
   }
@@ -1318,7 +1333,6 @@ const CommandLogic = {
 };
 
 // ==================== SLASH COMMANDS ====================
-// Nomi opzioni SEMPLICI (senza accenti, spazi, caratteri speciali)
 const slashCommands = [
   // Utility
   new SlashCommandBuilder().setName('help').setDescription('Mostra la lista dei comandi'),
@@ -1411,28 +1425,22 @@ const slashCommands = [
   new SlashCommandBuilder().setName('unlock').setDescription('Sblocca il canale')
 ];
 
-// ==================== REGISTRAZIONE COMANDI (con debug) ====================
+// ==================== REGISTRAZIONE COMANDI ====================
 async function registerSlashCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
 
   log.info(`Preparazione registrazione ${slashCommands.length} comandi...`);
 
-  // STEP 1: Validazione locale. Troviamo se uno dei comandi è malformato
   const validCommands = [];
   for (const cmd of slashCommands) {
     try {
       const json = cmd.toJSON();
       validCommands.push(json);
     } catch (err) {
-      log.err(`❌ Comando "/${cmd.name}" non valido in fase di build: ${err.message}`);
+      log.err(`❌ Comando "/${cmd.name}" non valido: ${err.message}`);
     }
   }
 
-  if (validCommands.length !== slashCommands.length) {
-    log.warn(`⚠️ ${slashCommands.length - validCommands.length} comandi scartati in locale`);
-  }
-
-  // STEP 2: Registrazione (global o guild)
   try {
     if (GUILD_ID) {
       log.info(`Registrazione ISTANTANEA sul server ${GUILD_ID}...`);
@@ -1442,7 +1450,7 @@ async function registerSlashCommands(clientId, token) {
       );
       log.ok(`✅ ${validCommands.length} comandi registrati ISTANTANEAMENTE su guild ${GUILD_ID}`);
     } else {
-      log.info('Registrazione globale (può richiedere fino a 1 ora per propagarsi)...');
+      log.info('Registrazione globale (può richiedere fino a 1 ora)...');
       await rest.put(
         Routes.applicationCommands(clientId),
         { body: validCommands }
@@ -1451,45 +1459,11 @@ async function registerSlashCommands(clientId, token) {
     }
   } catch (err) {
     log.err('Registrazione fallita', err);
-
-    // STEP 3: Debug — mostra il dettaglio dell'errore Discord
     if (err.rawError) {
       console.error('\n=== DETTAGLI ERRORE DISCORD ===');
       console.error(JSON.stringify(err.rawError, null, 2));
       console.error('=== FINE DETTAGLI ===\n');
-
-      // Prova a capire quale comando è rotto dall'indice dell'errore
-      const errors = err.rawError.errors;
-      if (errors && typeof errors === 'object') {
-        const indices = Object.keys(errors);
-        for (const idx of indices) {
-          const i = parseInt(idx);
-          if (!isNaN(i) && validCommands[i]) {
-            log.err(`➡️ Comando problematico: /${validCommands[i].name} (indice ${i})`);
-          }
-        }
-      }
     }
-
-    // STEP 4: Fallback — registra uno alla volta per isolare il problema
-    log.warn('Provo registrazione uno per uno per trovare il comando rotto...');
-    let okCount = 0;
-    let koCount = 0;
-    for (const cmd of validCommands) {
-      try {
-        if (GUILD_ID) {
-          await rest.post(Routes.applicationGuildCommands(clientId, GUILD_ID), { body: cmd });
-        } else {
-          await rest.post(Routes.applicationCommands(clientId), { body: cmd });
-        }
-        okCount++;
-      } catch (e) {
-        koCount++;
-        log.err(`❌ /${cmd.name} FALLITO: ${e.message}`);
-        if (e.rawError) console.error('   Dettagli:', JSON.stringify(e.rawError));
-      }
-    }
-    log.warn(`Registrazione individuale: ${okCount} OK, ${koCount} FALLITI`);
   }
 }
 
@@ -1535,9 +1509,10 @@ async function handlePrefixCommand(message) {
     switch (commandName) {
       case 'help':
         return channel.send({ embeds: [buildHelpEmbed()] });
+
       case 'stats': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         return showStats(message, false);
       }
 
@@ -1591,8 +1566,8 @@ async function handlePrefixCommand(message) {
       }
 
       case 'addcmd': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
         const name = args.shift()?.toLowerCase();
         const resp = args.join(' ');
         if (!name || !resp) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-addcmd <nome> <risposta>`')] });
@@ -1601,16 +1576,16 @@ async function handlePrefixCommand(message) {
         return message.reply({ embeds: [EmbedManager.success('Comando Aggiunto', `"${name}" salvato.`)] });
       }
       case 'delcmd': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
         const name = args.shift()?.toLowerCase();
         if (!storage.deleteCommand(name))
           return message.reply({ embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)] });
         return message.reply({ embeds: [EmbedManager.success('Comando Eliminato', `"${name}" rimosso.`)] });
       }
       case 'ticketpanel': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')] });
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('create_ticket').setLabel('Apri Ticket').setStyle(ButtonStyle.Primary)
         );
@@ -1644,8 +1619,8 @@ async function handlePrefixCommand(message) {
         });
       }
       case 'warn': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         let target = message.mentions.users.first();
         if (!target && args[0]) {
           const id = extractUserId(args[0]);
@@ -1671,8 +1646,8 @@ async function handlePrefixCommand(message) {
         });
       }
       case 'timeout': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         let target = message.mentions.users.first();
         if (!target && args[0]) {
           const id = extractUserId(args[0]);
@@ -1714,8 +1689,8 @@ async function handlePrefixCommand(message) {
       }
       case 'modlogs':
       case 'md': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-modlogs <id o @utente>`')] });
         const id = extractUserId(args[0]);
         if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
@@ -1725,8 +1700,8 @@ async function handlePrefixCommand(message) {
         return handleModlogs(message, target, false);
       }
       case 'dashboard': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')] });
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId('create_lobby').setLabel('Crea Lobby').setStyle(ButtonStyle.Primary)
         );
@@ -1737,10 +1712,30 @@ async function handlePrefixCommand(message) {
       }
       case 'bl':
       case 'blacklist': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
         const sub = args.shift()?.toLowerCase();
+
+        // Sub: list e check → Staff o superiore
+        if (sub === 'list') {
+          if (!hasStaffOrAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
+          return listBlacklist(message, false);
+        }
+        if (sub === 'check' || sub === 'info') {
+          if (!hasStaffOrAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
+          if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-bl check <id o @utente>`')] });
+          const id = extractUserId(args[0]);
+          if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
+          let target;
+          try { target = await client.users.fetch(id); }
+          catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non trovato.')] }); }
+          return checkBlacklist(message, target, false);
+        }
+
+        // Sub: add e remove → Solo Admin
         if (sub === 'add') {
+          if (!isAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
           if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-bl add <id o @utente> [motivo]`')] });
           const id = extractUserId(args[0]);
           if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
@@ -1750,6 +1745,8 @@ async function handlePrefixCommand(message) {
           return addBlacklist(message, target, args.slice(1).join(' ') || 'Nessun motivo specificato', message.author, false);
         }
         if (sub === 'remove' || sub === 'rm') {
+          if (!isAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
           if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-bl remove <id o @utente>`')] });
           const id = extractUserId(args[0]);
           if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
@@ -1758,32 +1755,27 @@ async function handlePrefixCommand(message) {
           catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non trovato.')] }); }
           return removeBlacklist(message, target, message.author, false);
         }
-        if (sub === 'check' || sub === 'info') {
-          if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-bl check <id o @utente>`')] });
-          const id = extractUserId(args[0]);
-          if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
-          let target;
-          try { target = await client.users.fetch(id); }
-          catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non trovato.')] }); }
-          return checkBlacklist(message, target, false);
-        }
-        if (sub === 'list') return listBlacklist(message, false);
+
+        // Default: mostra help
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         return message.reply({
           embeds: [EmbedManager.info('Blacklist', [
-            '`-bl add <id o @utente> [motivo]`',
-            '`-bl remove <id o @utente>`',
-            '`-bl list`',
-            '`-bl check <id o @utente>`'
+            '`-bl add <id o @utente> [motivo]` (Admin)',
+            '`-bl remove <id o @utente>` (Admin)',
+            '`-bl list` (Staff)',
+            '`-bl check <id o @utente>` (Staff)'
           ].join('\n'))]
         });
       }
 
       case 'note':
       case 'notes': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
         const sub = args.shift()?.toLowerCase();
+
         if (sub === 'add') {
+          if (!hasStaffOrAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
           if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note add <@utente o ID> <testo>`')] });
           const id = extractUserId(args[0]);
           if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
@@ -1794,6 +1786,8 @@ async function handlePrefixCommand(message) {
           return addNote(message, target, content, member, false);
         }
         if (sub === 'list') {
+          if (!hasStaffOrAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
           if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note list <@utente o ID>`')] });
           const id = extractUserId(args[0]);
           if (!id) return message.reply({ embeds: [EmbedManager.error('ID non valido', 'Deve essere 17-20 cifre.')] });
@@ -1803,22 +1797,27 @@ async function handlePrefixCommand(message) {
           return listNotes(message, target, false);
         }
         if (sub === 'remove' || sub === 'rm') {
+          if (!isAdmin(member))
+            return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
           const noteId = parseInt(args[0]);
           if (isNaN(noteId)) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-note remove <id_nota>`')] });
           return removeNote(message, noteId, member, false);
         }
+
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         return message.reply({
           embeds: [EmbedManager.info('Note', [
-            '`-note add <@utente o ID> <testo>`',
-            '`-note list <@utente o ID>`',
-            '`-note remove <id_nota>`'
+            '`-note add <@utente o ID> <testo>` (Staff)',
+            '`-note list <@utente o ID>` (Staff)',
+            '`-note remove <id_nota>` (Admin)'
           ].join('\n'))]
         });
       }
 
       case 'autorole': {
-        if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
         const sub = args.shift()?.toLowerCase();
         if (sub === 'set') {
           if (!args[0]) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-autorole set <@ruolo o ID>`')] });
@@ -1854,13 +1853,13 @@ async function handleSlashCommand(interaction) {
       return interaction.reply({ embeds: [buildHelpEmbed()] });
 
     case 'stats':
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!hasStaffOrAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       return showStats(interaction, true);
 
     case 'ticketpanel': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')], ephemeral: true });
+      if (!isAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('create_ticket').setLabel('Apri Ticket').setStyle(ButtonStyle.Primary)
       );
@@ -1894,8 +1893,8 @@ async function handleSlashCommand(interaction) {
     }
 
     case 'warn': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!hasStaffOrAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       const target = interaction.options.getUser('utente');
       const reason = interaction.options.getString('motivo') || 'Nessun motivo specificato';
       const m = guild.members.cache.get(target.id);
@@ -1917,8 +1916,8 @@ async function handleSlashCommand(interaction) {
     }
 
     case 'timeout': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!hasStaffOrAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       const target = interaction.options.getUser('utente');
       const seconds = interaction.options.getInteger('secondi');
       const reason = interaction.options.getString('motivo') || 'Nessun motivo specificato';
@@ -1990,14 +1989,14 @@ async function handleSlashCommand(interaction) {
       return purgeUser(interaction, u, amount, member, true);
     }
     case 'modlogs': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!hasStaffOrAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       return handleModlogs(interaction, interaction.options.getUser('utente'), true);
     }
 
     case 'addcmd': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!isAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
       const name = interaction.options.getString('nome').toLowerCase();
       const resp = interaction.options.getString('risposta');
       if (resp.length > 4096) return safeReply(interaction, { embeds: [EmbedManager.error('Troppo lungo', 'Max 4096.')], ephemeral: true });
@@ -2005,8 +2004,8 @@ async function handleSlashCommand(interaction) {
       return interaction.reply({ embeds: [EmbedManager.success('Comando Aggiunto', `"${name}" salvato.`)], ephemeral: true });
     }
     case 'delcmd': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!isAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
       const name = interaction.options.getString('nome').toLowerCase();
       if (!storage.deleteCommand(name))
         return safeReply(interaction, { embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)], ephemeral: true });
@@ -2014,8 +2013,8 @@ async function handleSlashCommand(interaction) {
     }
 
     case 'dashboard': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Non hai i permessi.')], ephemeral: true });
+      if (!isAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
       const row = new ActionRowBuilder().addComponents(
         new ButtonBuilder().setCustomId('create_lobby').setLabel('Crea Lobby').setStyle(ButtonStyle.Primary)
       );
@@ -2026,41 +2025,58 @@ async function handleSlashCommand(interaction) {
     }
 
     case 'blacklist': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
       const sub = interaction.options.getSubcommand();
-      if (sub === 'add') return addBlacklist(interaction, interaction.options.getUser('utente'), interaction.options.getString('motivo') || 'Nessun motivo specificato', interaction.user, true);
-      if (sub === 'remove') return removeBlacklist(interaction, interaction.options.getUser('utente'), interaction.user, true);
-      if (sub === 'list') return listBlacklist(interaction, true);
-      if (sub === 'check') return checkBlacklist(interaction, interaction.options.getUser('utente'), true);
+
+      // list e check → Staff
+      if (sub === 'list') {
+        if (!hasStaffOrAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
+        return listBlacklist(interaction, true);
+      }
+      if (sub === 'check') {
+        if (!hasStaffOrAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
+        return checkBlacklist(interaction, interaction.options.getUser('utente'), true);
+      }
+
+      // add e remove → Solo Admin
+      if (sub === 'add') {
+        if (!isAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
+        return addBlacklist(interaction, interaction.options.getUser('utente'), interaction.options.getString('motivo') || 'Nessun motivo specificato', interaction.user, true);
+      }
+      if (sub === 'remove') {
+        if (!isAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
+        return removeBlacklist(interaction, interaction.options.getUser('utente'), interaction.user, true);
+      }
       break;
     }
 
     case 'note': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
       const sub = interaction.options.getSubcommand();
+
       if (sub === 'add') {
-        return addNote(
-          interaction,
-          interaction.options.getUser('utente'),
-          interaction.options.getString('testo'),
-          member,
-          true
-        );
+        if (!hasStaffOrAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
+        return addNote(interaction, interaction.options.getUser('utente'), interaction.options.getString('testo'), member, true);
       }
       if (sub === 'list') {
+        if (!hasStaffOrAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
         return listNotes(interaction, interaction.options.getUser('utente'), true);
       }
       if (sub === 'remove') {
+        if (!isAdmin(member))
+          return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
         return removeNote(interaction, interaction.options.getInteger('id'), member, true);
       }
       break;
     }
 
     case 'autorole': {
-      if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
-        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')], ephemeral: true });
+      if (!isAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
       const sub = interaction.options.getSubcommand();
       if (sub === 'set') return setAutorole(interaction, interaction.options.getRole('ruolo'), member, true);
       if (sub === 'clear') return clearAutorole(interaction, member, true);
