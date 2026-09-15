@@ -23,6 +23,8 @@ const CLIENT_ID = (process.env.CLIENT_ID || '').trim();
 const MOD_LOG_CHANNEL_ID = (process.env.MOD_LOG_CHANNEL_ID || '').trim();
 const BLACKLIST_ADMIN_SERVERS = (process.env.BLACKLIST_ADMIN_SERVERS || '')
   .split(',').map(s => s.trim()).filter(Boolean);
+// Opzionale: per registrazione ISTANTANEA su un server specifico
+const GUILD_ID = (process.env.GUILD_ID || '').trim();
 
 if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 if (!CLIENT_ID) throw new Error('CLIENT_ID mancante nel file .env');
@@ -61,15 +63,6 @@ function extractUserId(input) {
   if (!input) return null;
   const str = String(input).trim();
   const m = str.match(/^<@!?(\d{17,20})>$/);
-  if (m) return m[1];
-  if (/^\d{17,20}$/.test(str)) return str;
-  return null;
-}
-
-function extractChannelId(input) {
-  if (!input) return null;
-  const str = String(input).trim();
-  const m = str.match(/^<#(\d{17,20})>$/);
   if (m) return m[1];
   if (/^\d{17,20}$/.test(str)) return str;
   return null;
@@ -176,8 +169,6 @@ const ModLogModule = {
     storage.saveLog(logData);
     try {
       if (!guild) return;
-
-      // Log per-server se configurato, altrimenti fallback al globale
       const config = storage.getGuildConfig(guild.id);
       const channelId = config.log_channel_id || MOD_LOG_CHANNEL_ID;
       const ch = guild.channels.cache.get(channelId);
@@ -545,7 +536,6 @@ function isServerAuthorized(guildId) {
 }
 
 async function handleGuildMemberAdd(member) {
-  // 1) Blacklist check
   if (storage.isBlacklisted(member.user.id)) {
     const entry = storage.getBlacklistEntry(member.user.id);
     try {
@@ -561,13 +551,12 @@ async function handleGuildMemberAdd(member) {
         reason: entry.reason,
         moderator: 'Sistema Automatico'
       });
-      return; // non assegnare autorole a chi è stato kickato
+      return;
     } catch (err) {
       log.err('handleGuildMemberAdd blacklist', err);
     }
   }
 
-  // 2) Autorole
   try {
     const config = storage.getGuildConfig(member.guild.id);
     if (config.autorole_id) {
@@ -855,7 +844,6 @@ async function purgeUser(source, targetUser, amount, executor, isSlash) {
   amount = Math.min(Math.max(amount || 100, 1), 100);
 
   try {
-    // Fetch degli ultimi 100 messaggi (limite Discord per bulkDelete)
     const messages = await channel.messages.fetch({ limit: 100 });
     const toDelete = messages
       .filter(m => m.author.id === targetUser.id)
@@ -1330,6 +1318,7 @@ const CommandLogic = {
 };
 
 // ==================== SLASH COMMANDS ====================
+// Nomi opzioni SEMPLICI (senza accenti, spazi, caratteri speciali)
 const slashCommands = [
   // Utility
   new SlashCommandBuilder().setName('help').setDescription('Mostra la lista dei comandi'),
@@ -1347,74 +1336,74 @@ const slashCommands = [
 
   // Moderazione
   new SlashCommandBuilder().setName('warn').setDescription('Warna un utente')
-    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('timeout').setDescription('Timeout utente')
-    .addUserOption(o => o.setName('utente').setRequired(true))
-    .addIntegerOption(o => o.setName('secondi').setRequired(true).setDescription('Durata (1-2419200)'))
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
+    .addIntegerOption(o => o.setName('secondi').setDescription('Durata in secondi (1-2419200)').setRequired(true))
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('kick').setDescription('Espelle un utente')
-    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('ban').setDescription('Banna un utente')
-    .addUserOption(o => o.setName('utente').setRequired(true))
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
-  new SlashCommandBuilder().setName('unban').setDescription('Sbanna un utente')
-    .addStringOption(o => o.setName('id').setRequired(true).setDescription('ID utente')),
-  new SlashCommandBuilder().setName('clear').setDescription('Cancella messaggi')
-    .addIntegerOption(o => o.setName('quantita').setRequired(true).setDescription('1-100')),
+  new SlashCommandBuilder().setName('unban').setDescription('Sbanna un utente tramite ID')
+    .addStringOption(o => o.setName('id').setDescription('ID utente').setRequired(true)),
+  new SlashCommandBuilder().setName('clear').setDescription('Cancella messaggi (1-100)')
+    .addIntegerOption(o => o.setName('quantita').setDescription('Numero messaggi').setRequired(true)),
   new SlashCommandBuilder().setName('purge').setDescription('Cancella i messaggi di un utente nel canale')
-    .addUserOption(o => o.setName('utente').setRequired(true).setDescription('Utente di cui cancellare i messaggi'))
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addIntegerOption(o => o.setName('quantita').setDescription('Numero max messaggi (1-100, default 100)')),
   new SlashCommandBuilder().setName('modlogs').setDescription('Mostra log moderazione')
-    .addUserOption(o => o.setName('utente').setRequired(true)),
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)),
 
   // Blacklist
   new SlashCommandBuilder().setName('blacklist').setDescription('Gestione blacklist globale')
     .addSubcommand(s => s.setName('add').setDescription('Aggiungi alla blacklist')
-      .addUserOption(o => o.setName('utente').setRequired(true))
-      .addStringOption(o => o.setName('motivo')))
+      .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
+      .addStringOption(o => o.setName('motivo').setDescription('Motivo')))
     .addSubcommand(s => s.setName('remove').setDescription('Rimuovi dalla blacklist')
-      .addUserOption(o => o.setName('utente').setRequired(true)))
+      .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)))
     .addSubcommand(s => s.setName('list').setDescription('Mostra la lista'))
     .addSubcommand(s => s.setName('check').setDescription('Controlla un utente')
-      .addUserOption(o => o.setName('utente').setRequired(true))),
+      .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))),
 
   // Note
   new SlashCommandBuilder().setName('note').setDescription('Gestione note staff')
     .addSubcommand(s => s.setName('add').setDescription('Aggiungi una nota')
-      .addUserOption(o => o.setName('utente').setRequired(true))
-      .addStringOption(o => o.setName('testo').setRequired(true).setDescription('Contenuto nota')))
+      .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
+      .addStringOption(o => o.setName('testo').setDescription('Contenuto nota').setRequired(true)))
     .addSubcommand(s => s.setName('list').setDescription('Lista note di un utente')
-      .addUserOption(o => o.setName('utente').setRequired(true)))
+      .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)))
     .addSubcommand(s => s.setName('remove').setDescription('Rimuovi una nota')
-      .addIntegerOption(o => o.setName('id').setRequired(true).setDescription('ID nota'))),
+      .addIntegerOption(o => o.setName('id').setDescription('ID nota').setRequired(true))),
 
   // Autorole
-  new SlashCommandBuilder().setName('autorole').setDescription('Configura il ruolo automatico all\'ingresso')
+  new SlashCommandBuilder().setName('autorole').setDescription('Configura il ruolo automatico')
     .addSubcommand(s => s.setName('set').setDescription('Imposta il ruolo automatico')
-      .addRoleOption(o => o.setName('ruolo').setRequired(true)))
+      .addRoleOption(o => o.setName('ruolo').setDescription('Ruolo').setRequired(true)))
     .addSubcommand(s => s.setName('clear').setDescription('Rimuovi il ruolo automatico')),
 
   // Custom
   new SlashCommandBuilder().setName('addcmd').setDescription('Aggiunge comando custom')
-    .addStringOption(o => o.setName('nome').setRequired(true))
-    .addStringOption(o => o.setName('risposta').setRequired(true)),
+    .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true))
+    .addStringOption(o => o.setName('risposta').setDescription('Risposta').setRequired(true)),
   new SlashCommandBuilder().setName('delcmd').setDescription('Elimina comando custom')
-    .addStringOption(o => o.setName('nome').setRequired(true)),
+    .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true)),
 
-  // Lobby / Dashboard
+  // Lobby
   new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard (crea lobby)'),
 
   // Inviti & Ruoli
   new SlashCommandBuilder().setName('invite').setDescription('Invia un invito (1 uso, 60 min)')
-    .addUserOption(o => o.setName('utente').setRequired(true)),
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)),
   new SlashCommandBuilder().setName('giverole').setDescription('Assegna un ruolo')
-    .addUserOption(o => o.setName('utente').setRequired(true))
-    .addRoleOption(o => o.setName('ruolo').setRequired(true)),
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
+    .addRoleOption(o => o.setName('ruolo').setDescription('Ruolo').setRequired(true)),
   new SlashCommandBuilder().setName('removerole').setDescription('Rimuove un ruolo')
-    .addUserOption(o => o.setName('utente').setRequired(true))
-    .addRoleOption(o => o.setName('ruolo').setRequired(true)),
+    .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
+    .addRoleOption(o => o.setName('ruolo').setDescription('Ruolo').setRequired(true)),
 
   // Canali
   new SlashCommandBuilder().setName('lock').setDescription('Blocca il canale')
@@ -1422,14 +1411,85 @@ const slashCommands = [
   new SlashCommandBuilder().setName('unlock').setDescription('Sblocca il canale')
 ];
 
+// ==================== REGISTRAZIONE COMANDI (con debug) ====================
 async function registerSlashCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
+
+  log.info(`Preparazione registrazione ${slashCommands.length} comandi...`);
+
+  // STEP 1: Validazione locale. Troviamo se uno dei comandi è malformato
+  const validCommands = [];
+  for (const cmd of slashCommands) {
+    try {
+      const json = cmd.toJSON();
+      validCommands.push(json);
+    } catch (err) {
+      log.err(`❌ Comando "/${cmd.name}" non valido in fase di build: ${err.message}`);
+    }
+  }
+
+  if (validCommands.length !== slashCommands.length) {
+    log.warn(`⚠️ ${slashCommands.length - validCommands.length} comandi scartati in locale`);
+  }
+
+  // STEP 2: Registrazione (global o guild)
   try {
-    log.info('Registrazione comandi slash...');
-    await rest.put(Routes.applicationCommands(clientId), { body: slashCommands.map(c => c.toJSON()) });
-    log.ok(`Comandi slash registrati (${slashCommands.length})!`);
+    if (GUILD_ID) {
+      log.info(`Registrazione ISTANTANEA sul server ${GUILD_ID}...`);
+      await rest.put(
+        Routes.applicationGuildCommands(clientId, GUILD_ID),
+        { body: validCommands }
+      );
+      log.ok(`✅ ${validCommands.length} comandi registrati ISTANTANEAMENTE su guild ${GUILD_ID}`);
+    } else {
+      log.info('Registrazione globale (può richiedere fino a 1 ora per propagarsi)...');
+      await rest.put(
+        Routes.applicationCommands(clientId),
+        { body: validCommands }
+      );
+      log.ok(`✅ ${validCommands.length} comandi registrati globalmente`);
+    }
   } catch (err) {
-    log.err('Registrazione comandi', err);
+    log.err('Registrazione fallita', err);
+
+    // STEP 3: Debug — mostra il dettaglio dell'errore Discord
+    if (err.rawError) {
+      console.error('\n=== DETTAGLI ERRORE DISCORD ===');
+      console.error(JSON.stringify(err.rawError, null, 2));
+      console.error('=== FINE DETTAGLI ===\n');
+
+      // Prova a capire quale comando è rotto dall'indice dell'errore
+      const errors = err.rawError.errors;
+      if (errors && typeof errors === 'object') {
+        const indices = Object.keys(errors);
+        for (const idx of indices) {
+          const i = parseInt(idx);
+          if (!isNaN(i) && validCommands[i]) {
+            log.err(`➡️ Comando problematico: /${validCommands[i].name} (indice ${i})`);
+          }
+        }
+      }
+    }
+
+    // STEP 4: Fallback — registra uno alla volta per isolare il problema
+    log.warn('Provo registrazione uno per uno per trovare il comando rotto...');
+    let okCount = 0;
+    let koCount = 0;
+    for (const cmd of validCommands) {
+      try {
+        if (GUILD_ID) {
+          await rest.post(Routes.applicationGuildCommands(clientId, GUILD_ID), { body: cmd });
+        } else {
+          await rest.post(Routes.applicationCommands(clientId), { body: cmd });
+        }
+        okCount++;
+      } catch (e) {
+        koCount++;
+        log.err(`❌ /${cmd.name} FALLITO: ${e.message}`);
+        if (e.rawError) console.error('   Dettagli:', JSON.stringify(e.rawError));
+      }
+    }
+    log.warn(`Registrazione individuale: ${okCount} OK, ${koCount} FALLITI`);
   }
 }
 
@@ -1461,7 +1521,6 @@ async function handlePrefixCommand(message) {
 
   const { guild, channel, member } = message;
 
-  // Custom command fallback
   const custom = storage.getCommand(commandName);
   if (custom) return channel.send(custom);
 
@@ -1474,7 +1533,6 @@ async function handlePrefixCommand(message) {
 
   try {
     switch (commandName) {
-      // ===== UTILITY =====
       case 'help':
         return channel.send({ embeds: [buildHelpEmbed()] });
       case 'stats': {
@@ -1483,7 +1541,6 @@ async function handlePrefixCommand(message) {
         return showStats(message, false);
       }
 
-      // ===== MODERAZIONE =====
       case 'kick': {
         if (!args[0]) return message.reply('❌ Uso: `-kick <id o @utente> [motivo]`');
         return replyMethod(await CommandLogic.kick(guild, member, args[0], args.slice(1).join(' ') || 'Nessun motivo'));
@@ -1533,7 +1590,6 @@ async function handlePrefixCommand(message) {
         return replyMethod(await CommandLogic.unlockChannel(channel, member));
       }
 
-      // ===== TICKET =====
       case 'addcmd': {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
@@ -1722,7 +1778,6 @@ async function handlePrefixCommand(message) {
         });
       }
 
-      // ===== NOTE =====
       case 'note':
       case 'notes': {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
@@ -1761,7 +1816,6 @@ async function handlePrefixCommand(message) {
         });
       }
 
-      // ===== AUTOROLE =====
       case 'autorole': {
         if (!member.permissions.has(PermissionsBitField.Flags.Administrator))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo admin.')] });
@@ -2060,7 +2114,7 @@ async function handleButton(interaction) {
 // ==================== EVENTS ====================
 client.once(Events.ClientReady, () => {
   log.ok(`Bot online come ${client.user.tag}`);
-  log.info(`Slash commands registrati: ${slashCommands.length}`);
+  log.info(`Slash commands preparati: ${slashCommands.length}`);
   log.info(`Prefix: - & (es. -help, -ticket, -warn @user)`);
 });
 
