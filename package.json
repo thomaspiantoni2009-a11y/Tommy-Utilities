@@ -1,34 +1,16 @@
 {
-  "name": "discord-bot-single",
-  "version": "1.0.0",
-  "description": "Discord Bot - All in One File with Embed-Based Architecture",
+  "name": "discord-mod-bot",
+  "version": "2.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "nodemon index.js"
+    "start": "node index.js"
   },
-  "keywords": [
-    "discord",
-    "bot",
-    "embed",
-    "all-in-one"
-  ],
-  "author": "",
-  "license": "MIT",
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
-    "bcrypt": "^6.0.0",
-    "cors": "^2.8.6",
-    "discord.js": "^14.26.4",
-    "distube": "^5.2.3",
-    "dotenv": "^16.6.1",
-    "express": "^5.2.1",
-    "express-rate-limit": "^8.5.2",
-    "helmet": "^8.2.0",
-    "jsonwebtoken": "^9.0.3"
+    "better-sqlite3": "^11.3.0",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
   },
-  "devDependencies": {
-    "nodemon": "^3.0.0"
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
-
