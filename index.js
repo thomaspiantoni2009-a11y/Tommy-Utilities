@@ -1442,6 +1442,29 @@ async function registerSlashCommands(clientId, token) {
   }
 
   try {
+    // STEP 1: PULIZIA — cancella tutti i comandi esistenti
+    log.info('🧹 Pulizia comandi esistenti...');
+
+    try {
+      await rest.put(Routes.applicationCommands(clientId), { body: [] });
+      log.ok('✅ Comandi globali cancellati');
+    } catch (err) {
+      log.warn(`Cancellazione globali fallita: ${err.message}`);
+    }
+
+    if (GUILD_ID) {
+      try {
+        await rest.put(Routes.applicationGuildCommands(clientId, GUILD_ID), { body: [] });
+        log.ok(`✅ Comandi guild ${GUILD_ID} cancellati`);
+      } catch (err) {
+        log.warn(`Cancellazione guild fallita: ${err.message}`);
+      }
+    }
+
+    log.info('⏳ Attesa 2 secondi...');
+    await new Promise(r => setTimeout(r, 2000));
+
+    // STEP 2: REGISTRAZIONE — registra i comandi puliti
     if (GUILD_ID) {
       log.info(`Registrazione ISTANTANEA sul server ${GUILD_ID}...`);
       await rest.put(
