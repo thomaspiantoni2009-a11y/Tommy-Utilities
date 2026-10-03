@@ -141,6 +141,24 @@ async function safeReplySource(source, data, isSlash) {
   }
 }
 
+// ===== Auto-embed per risposte testuali di CommandLogic =====
+function buildResultEmbed(result, defaultTitle = 'Risultato') {
+  const msg = (result && result.message) ? String(result.message) : '';
+  const isSuccess = msg.includes('✅') || result?.success === true;
+  const isError = msg.includes('❌') || result?.success === false;
+
+  const cleanText = msg.replace(/^[✅❌⚠️🧹🔒🔓🏓⏱️]️?\s*/u, '').trim();
+  const title = isSuccess ? `✅ ${defaultTitle}` : isError ? `❌ ${defaultTitle}` : `ℹ️ ${defaultTitle}`;
+  const color = isSuccess ? 0x00FF00 : isError ? 0xFF0000 : 0x0099FF;
+
+  return EmbedManager.createEmbed({
+    title,
+    description: cleanText || 'Operazione completata.',
+    color,
+    timestamp: true
+  });
+}
+
 // ==================== EMBED MANAGER ====================
 class EmbedManager {
   static createEmbed(options = {}) {
@@ -385,6 +403,7 @@ async function closeTicket(source, user) {
     closingTickets.delete(channel.id);
   }
 }
+
 // ==================== LOBBY ====================
 async function createLobby(interaction) {
   const user = interaction.user;
@@ -457,7 +476,6 @@ async function createLobby(interaction) {
     });
   }
 }
-
 // ==================== MODLOGS ====================
 async function handleModlogs(source, target, isSlash) {
   if (!target) {
@@ -943,7 +961,6 @@ async function addNote(source, targetUser, content, author, isSlash) {
     ephemeral: isSlash
   }, isSlash);
 }
-
 async function listNotes(source, targetUser, isSlash) {
   const guildId = source.guild.id;
   const notes = storage.getNotesForUser(guildId, targetUser.id);
@@ -1309,7 +1326,7 @@ const CommandLogic = {
 
     await channel.permissionOverwrites.edit(everyone, { SendMessages: false });
     const name = executor.user ? executor.user.tag : executor.username;
-    return { success: true, message: `🔒 **Canale bloccato!**\nMotivo: ${reason}\nDa: ${name}` };
+    return { success: true, message: `🔒 Canale bloccato! Motivo: ${reason} - Da: ${name}` };
   },
 
   async unlockChannel(channel, executor) {
@@ -1327,7 +1344,7 @@ const CommandLogic = {
 
     await channel.permissionOverwrites.delete(everyone);
     const name = executor.user ? executor.user.tag : executor.username;
-    return { success: true, message: `🔓 **Canale sbloccato!**\nDa: ${name}` };
+    return { success: true, message: `🔓 Canale sbloccato! Da: ${name}` };
   }
 };
 
@@ -1414,6 +1431,7 @@ const slashCommands = [
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('unlock').setDescription('Sblocca il canale')
 ];
+
 // ==================== REGISTRAZIONE COMANDI ====================
 async function registerSlashCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -1476,7 +1494,6 @@ async function registerSlashCommands(clientId, token) {
     }
   }
 }
-
 // ==================== CLIENT ====================
 const client = new Client({
   intents: [
@@ -1513,7 +1530,12 @@ async function handlePrefixCommand(message) {
     return message.reply({ content: `⏳ Aspetta ${cd.remaining}s prima di riusare questo comando.`, allowedMentions: { repliedUser: false } });
   }
 
-  const replyMethod = async (r) => message.reply({ content: r.message, allowedMentions: { repliedUser: false } });
+  // Reply helper automatico in embed
+  const replyMethod = async (r) => {
+    if (!r || !r.message) return;
+    const embed = buildResultEmbed(r, r.title || 'Risultato');
+    return message.reply({ embeds: [embed], allowedMentions: { repliedUser: false } });
+  };
 
   try {
     switch (commandName) {
@@ -1559,20 +1581,24 @@ async function handlePrefixCommand(message) {
 
       case 'kick': {
         if (!args[0]) return message.reply('❌ Uso: `-kick <id o @utente> [motivo]`');
-        return replyMethod(await CommandLogic.kick(guild, member, args[0], args.slice(1).join(' ') || 'Nessun motivo'));
+        const r = await CommandLogic.kick(guild, member, args[0], args.slice(1).join(' ') || 'Nessun motivo');
+        return replyMethod({ ...r, title: 'Kick' });
       }
       case 'ban': {
         if (!args[0]) return message.reply('❌ Uso: `-ban <id o @utente> [motivo]`');
-        return replyMethod(await CommandLogic.ban(guild, member, args[0], args.slice(1).join(' ') || 'Nessun motivo'));
+        const r = await CommandLogic.ban(guild, member, args[0], args.slice(1).join(' ') || 'Nessun motivo');
+        return replyMethod({ ...r, title: 'Ban' });
       }
       case 'unban': {
         if (!args[0]) return message.reply('❌ Uso: `-unban <id o @utente>`');
-        return replyMethod(await CommandLogic.unban(guild, member, args[0]));
+        const r = await CommandLogic.unban(guild, member, args[0]);
+        return replyMethod({ ...r, title: 'Unban' });
       }
       case 'clear': {
         const amount = parseInt(args[0]);
         if (isNaN(amount)) return message.reply('❌ Uso: `-clear <1-100>`');
-        return replyMethod(await CommandLogic.clear(channel, member, amount));
+        const r = await CommandLogic.clear(channel, member, amount);
+        return replyMethod({ ...r, title: 'Clear' });
       }
       case 'purge': {
         if (!args[0]) return message.reply('❌ Uso: `-purge <@utente o ID> [quantità]`');
@@ -1585,25 +1611,31 @@ async function handlePrefixCommand(message) {
       }
       case 'invite': {
         if (!args[0]) return message.reply('❌ Uso: `-invite <id o @utente>`');
-        return CommandLogic.invite(message, guild, member, args[0], replyMethod);
+        return CommandLogic.invite(message, guild, member, args[0], async (r) => {
+          return message.reply({ embeds: [buildResultEmbed(r, 'Invito')], allowedMentions: { repliedUser: false } });
+        });
       }
       case 'giverole': {
         if (!args[0] || !args[1]) return message.reply('❌ Uso: `-giverole <user> <role>`');
-        return replyMethod(await CommandLogic.addRole(guild, member, args[0], args[1]));
+        const r = await CommandLogic.addRole(guild, member, args[0], args[1]);
+        return replyMethod({ ...r, title: 'Give Role' });
       }
       case 'removerole': {
         if (!args[0] || !args[1]) return message.reply('❌ Uso: `-removerole <user> <role>`');
-        return replyMethod(await CommandLogic.removeRole(guild, member, args[0], args[1]));
+        const r = await CommandLogic.removeRole(guild, member, args[0], args[1]);
+        return replyMethod({ ...r, title: 'Remove Role' });
       }
       case 'roles': {
         const r = await CommandLogic.listRoles(guild);
         return channel.send({ content: r.message });
       }
       case 'lock': {
-        return replyMethod(await CommandLogic.lockChannel(channel, member, args.join(' ') || 'Nessun motivo'));
+        const r = await CommandLogic.lockChannel(channel, member, args.join(' ') || 'Nessun motivo');
+        return replyMethod({ ...r, title: 'Canale Bloccato' });
       }
       case 'unlock': {
-        return replyMethod(await CommandLogic.unlockChannel(channel, member));
+        const r = await CommandLogic.unlockChannel(channel, member);
+        return replyMethod({ ...r, title: 'Canale Sbloccato' });
       }
 
       case 'addcmd': {
@@ -1717,7 +1749,8 @@ async function handlePrefixCommand(message) {
         });
         return channel.send({
           embeds: [EmbedManager.createEmbed({
-            title: 'Timeout', color: 0xFFA500,
+            title: '⏱️ Timeout',
+            color: 0xFFA500,
             fields: [
               { name: 'Utente', value: `${target.username} (${target.id})`, inline: true },
               { name: 'Moderatore', value: message.author.username, inline: true },
@@ -2009,7 +2042,7 @@ async function handleSlashCommand(interaction) {
       });
       return interaction.reply({
         embeds: [EmbedManager.createEmbed({
-          title: 'Timeout', color: 0xFFA500,
+          title: '⏱️ Timeout', color: 0xFFA500,
           fields: [
             { name: 'Utente', value: `${target.username} (${target.id})`, inline: true },
             { name: 'Moderatore', value: interaction.user.username, inline: true },
@@ -2027,7 +2060,7 @@ async function handleSlashCommand(interaction) {
       const u = interaction.options.getUser('utente');
       const r = interaction.options.getString('motivo') || 'Nessun motivo';
       const res = await CommandLogic.kick(guild, member, u.id, r);
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Kick' })], ephemeral: !res.success });
     }
     case 'ban': {
       if (!member.permissions.has(PermissionsBitField.Flags.BanMembers))
@@ -2035,20 +2068,20 @@ async function handleSlashCommand(interaction) {
       const u = interaction.options.getUser('utente');
       const r = interaction.options.getString('motivo') || 'Nessun motivo';
       const res = await CommandLogic.ban(guild, member, u.id, r);
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Ban' })], ephemeral: !res.success });
     }
     case 'unban': {
       if (!member.permissions.has(PermissionsBitField.Flags.BanMembers))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Banna Membri".')], ephemeral: true });
       const res = await CommandLogic.unban(guild, member, interaction.options.getString('id'));
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Unban' })], ephemeral: !res.success });
     }
     case 'clear': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageMessages))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Gestisci Messaggi".')], ephemeral: true });
       const amount = interaction.options.getInteger('quantita');
       const res = await CommandLogic.clear(interaction.channel, member, amount);
-      await interaction.reply({ content: res.message, ephemeral: true });
+      await interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Clear' })], ephemeral: true });
       if (res.success) setTimeout(() => interaction.deleteReply().catch(() => {}), 5000);
       return;
     }
@@ -2152,7 +2185,10 @@ async function handleSlashCommand(interaction) {
 
     case 'invite': {
       const u = interaction.options.getUser('utente');
-      return CommandLogic.invite(interaction, guild, member, u.id, async (r) => interaction.reply({ content: r.message, ephemeral: !r.success }));
+      return CommandLogic.invite(interaction, guild, member, u.id, async (r) => interaction.reply({
+        embeds: [buildResultEmbed(r, 'Invito')],
+        ephemeral: !r.success
+      }));
     }
 
     case 'giverole': {
@@ -2161,7 +2197,7 @@ async function handleSlashCommand(interaction) {
       const u = interaction.options.getUser('utente');
       const role = interaction.options.getRole('ruolo');
       const res = await CommandLogic.addRole(guild, member, u.id, role.id);
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Give Role' })], ephemeral: !res.success });
     }
     case 'removerole': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageRoles))
@@ -2169,20 +2205,20 @@ async function handleSlashCommand(interaction) {
       const u = interaction.options.getUser('utente');
       const role = interaction.options.getRole('ruolo');
       const res = await CommandLogic.removeRole(guild, member, u.id, role.id);
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Remove Role' })], ephemeral: !res.success });
     }
 
     case 'lock': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageChannels))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Gestisci Canali".')], ephemeral: true });
       const res = await CommandLogic.lockChannel(interaction.channel, member, interaction.options.getString('motivo') || 'Nessun motivo');
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Canale Bloccato' })], ephemeral: !res.success });
     }
     case 'unlock': {
       if (!member.permissions.has(PermissionsBitField.Flags.ManageChannels))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve "Gestisci Canali".')], ephemeral: true });
       const res = await CommandLogic.unlockChannel(interaction.channel, member);
-      return interaction.reply({ content: res.message, ephemeral: !res.success });
+      return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Canale Sbloccato' })], ephemeral: !res.success });
     }
   }
 }
@@ -2290,3 +2326,10 @@ process.on('uncaughtException', (err) => log.err('uncaughtException', err));
     process.exit(1);
   }
 })();
+
+process.on('SIGINT', () => {
+  log.warn('Shutdown...');
+  storage.close();
+  client.destroy();
+  process.exit(0);
+});
