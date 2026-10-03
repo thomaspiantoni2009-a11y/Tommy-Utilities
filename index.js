@@ -14,9 +14,6 @@ const {
   REST,
   Routes
 } = require('discord.js');
-features = require('./features')
-
-
 
 const StorageService = require('./storage');
 
@@ -61,7 +58,6 @@ function getRoles(member, guild) {
     .join(', ') || 'Nessuno';
 }
 
-// ===== Verifica permessi staff/admin =====
 const STAFF_ROLES = ['Staff', 'Admin', 'Senior Admin'];
 const ADMIN_ROLES = ['Admin', 'Senior Admin'];
 
@@ -108,7 +104,6 @@ function getPaginatedSlice(arr, page, perPage) {
   return arr.slice(start, start + perPage);
 }
 
-// ===== Cooldown =====
 const cooldowns = new Map();
 setInterval(() => {
   const now = Date.now();
@@ -126,7 +121,6 @@ function checkCooldown(userId, commandName, cooldownTime = 3000) {
   return { onCooldown: false };
 }
 
-// ===== Safe reply =====
 async function safeReply(interaction, data) {
   try {
     if (interaction.replied || interaction.deferred) return await interaction.followUp(data);
@@ -177,11 +171,8 @@ class EmbedManager {
   static warning(title, desc) { return this.createEmbed({ title, description: desc, color: 0xFFA500, timestamp: true }); }
 }
 
-// ==================== STORAGE ====================
 let clientRef = null;
 const storage = new StorageService(process.env.DB_PATH || './data/bot.db');
-
-// ==================== BOT START TIME ====================
 const botStartTime = Date.now();
 
 // ==================== MOD LOG ====================
@@ -220,7 +211,6 @@ const ModLogModule = {
   }
 };
 
-// ==================== TICKET ====================
 const TICKET_COOLDOWN_MS = 5 * 60 * 1000;
 const CLOSE_DELAY_MS = 3000;
 const closingTickets = new Set();
@@ -395,7 +385,6 @@ async function closeTicket(source, user) {
     closingTickets.delete(channel.id);
   }
 }
-
 // ==================== LOBBY ====================
 async function createLobby(interaction) {
   const user = interaction.user;
@@ -1344,23 +1333,19 @@ const CommandLogic = {
 
 // ==================== SLASH COMMANDS ====================
 const slashCommands = [
-  // Utility
   new SlashCommandBuilder().setName('help').setDescription('Mostra la lista dei comandi'),
   new SlashCommandBuilder().setName('stats').setDescription('Mostra le statistiche del bot'),
   new SlashCommandBuilder().setName('ping').setDescription('Mostra la latenza del bot'),
   new SlashCommandBuilder().setName('uptime').setDescription('Mostra da quanto tempo il bot è online'),
 
-  // Ticket
   new SlashCommandBuilder().setName('ticketpanel').setDescription('Crea il pannello ticket'),
   new SlashCommandBuilder().setName('ticket').setDescription('Apre un ticket'),
   new SlashCommandBuilder().setName('close').setDescription('Chiude il ticket corrente'),
 
-  // Utente
   new SlashCommandBuilder().setName('userinfo').setDescription('Mostra info utente')
     .addUserOption(o => o.setName('utente').setDescription('Utente')),
   new SlashCommandBuilder().setName('roles').setDescription('Lista ruoli del server'),
 
-  // Moderazione
   new SlashCommandBuilder().setName('warn').setDescription('Warna un utente')
     .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
@@ -1384,7 +1369,6 @@ const slashCommands = [
   new SlashCommandBuilder().setName('modlogs').setDescription('Mostra log moderazione')
     .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)),
 
-  // Blacklist
   new SlashCommandBuilder().setName('blacklist').setDescription('Gestione blacklist globale')
     .addSubcommand(s => s.setName('add').setDescription('Aggiungi alla blacklist')
       .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
@@ -1395,7 +1379,6 @@ const slashCommands = [
     .addSubcommand(s => s.setName('check').setDescription('Controlla un utente')
       .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))),
 
-  // Note
   new SlashCommandBuilder().setName('note').setDescription('Gestione note staff')
     .addSubcommand(s => s.setName('add').setDescription('Aggiungi una nota')
       .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
@@ -1405,23 +1388,19 @@ const slashCommands = [
     .addSubcommand(s => s.setName('remove').setDescription('Rimuovi una nota')
       .addIntegerOption(o => o.setName('id').setDescription('ID nota').setRequired(true))),
 
-  // Autorole
   new SlashCommandBuilder().setName('autorole').setDescription('Configura il ruolo automatico')
     .addSubcommand(s => s.setName('set').setDescription('Imposta il ruolo automatico')
       .addRoleOption(o => o.setName('ruolo').setDescription('Ruolo').setRequired(true)))
     .addSubcommand(s => s.setName('clear').setDescription('Rimuovi il ruolo automatico')),
 
-  // Custom
   new SlashCommandBuilder().setName('addcmd').setDescription('Aggiunge comando custom')
     .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true))
     .addStringOption(o => o.setName('risposta').setDescription('Risposta').setRequired(true)),
   new SlashCommandBuilder().setName('delcmd').setDescription('Elimina comando custom')
     .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true)),
 
-  // Lobby
   new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard (crea lobby)'),
 
-  // Inviti & Ruoli
   new SlashCommandBuilder().setName('invite').setDescription('Invia un invito (1 uso, 60 min)')
     .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true)),
   new SlashCommandBuilder().setName('giverole').setDescription('Assegna un ruolo')
@@ -1431,12 +1410,10 @@ const slashCommands = [
     .addUserOption(o => o.setName('utente').setDescription('Utente').setRequired(true))
     .addRoleOption(o => o.setName('ruolo').setDescription('Ruolo').setRequired(true)),
 
-  // Canali
   new SlashCommandBuilder().setName('lock').setDescription('Blocca il canale')
     .addStringOption(o => o.setName('motivo').setDescription('Motivo')),
   new SlashCommandBuilder().setName('unlock').setDescription('Sblocca il canale')
 ];
-
 // ==================== REGISTRAZIONE COMANDI ====================
 async function registerSlashCommands(clientId, token) {
   const rest = new REST({ version: '10' }).setToken(token);
@@ -2217,7 +2194,7 @@ async function handleButton(interaction) {
   if (interaction.customId === 'create_lobby') return createLobby(interaction);
 }
 
-// ==================== FEATURES (DEVE STARE PRIMA DEGLI EVENTI) ====================
+// ==================== FEATURES ====================
 let features = [];
 try {
   features = require('./features');
