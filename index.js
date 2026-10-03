@@ -33,7 +33,6 @@ if (!MOD_LOG_CHANNEL_ID) throw new Error('MOD_LOG_CHANNEL_ID mancante nel file .
 let features = [];
 try {
   features = require('./features');
-  ...
 
 // ==================== LOGGER ====================
 const log = {
