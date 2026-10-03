@@ -1625,9 +1625,9 @@ async function handlePrefixCommand(message) {
         const r = await CommandLogic.removeRole(guild, member, args[0], args[1]);
         return replyMethod({ ...r, title: 'Remove Role' });
       }
-      case 'roles': {
-        const r = await CommandLogic.listRoles(guild);
-        return channel.send({ content: r.message });
+case 'roles': {
+  const r = await CommandLogic.listRoles(guild);
+  return channel.send({ embeds: [buildResultEmbed({ ...r, title: 'Lista Ruoli' })] });
       }
       case 'lock': {
         const r = await CommandLogic.lockChannel(channel, member, args.join(' ') || 'Nessun motivo');
