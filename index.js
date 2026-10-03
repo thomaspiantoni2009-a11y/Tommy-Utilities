@@ -178,6 +178,9 @@ class EmbedManager {
 let clientRef = null;
 const storage = new StorageService(process.env.DB_PATH || './data/bot.db');
 
+// ==================== BOT START TIME ====================
+const botStartTime = Date.now();
+
 // ==================== MOD LOG ====================
 const ModLogModule = {
   async logUserAction(guild, logData = {}) {
@@ -1090,7 +1093,7 @@ function buildHelpEmbed() {
       { name: '🚫 Blacklist', value: '`/blacklist add|remove|list|check`', inline: true },
       { name: '📝 Note', value: '`/note add|list|remove`', inline: true },
       { name: '⚙️ Config', value: '`/autorole set|clear`', inline: true },
-      { name: '👤 Utente', value: '`/userinfo` `/roles` `/stats`', inline: true },
+      { name: '👤 Utente', value: '`/userinfo` `/roles` `/stats` `/ping` `/uptime`', inline: true },
       { name: '📨 Inviti & Ruoli', value: '`/invite` `/giverole` `/removerole`', inline: true },
       { name: '🔒 Canali', value: '`/lock` `/unlock`', inline: true },
       { name: '🎮 Lobby', value: '`/dashboard`', inline: true },
@@ -1343,6 +1346,8 @@ const slashCommands = [
   // Utility
   new SlashCommandBuilder().setName('help').setDescription('Mostra la lista dei comandi'),
   new SlashCommandBuilder().setName('stats').setDescription('Mostra le statistiche del bot'),
+  new SlashCommandBuilder().setName('ping').setDescription('Mostra la latenza del bot'),
+  new SlashCommandBuilder().setName('uptime').setDescription('Mostra da quanto tempo il bot è online'),
 
   // Ticket
   new SlashCommandBuilder().setName('ticketpanel').setDescription('Crea il pannello ticket'),
@@ -1543,6 +1548,37 @@ async function handlePrefixCommand(message) {
         if (!hasStaffOrAdmin(member))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         return showStats(message, false);
+      }
+
+      case 'ping': {
+        const latency = Date.now() - message.createdTimestamp;
+        const apiLatency = Math.round(client.ws.ping);
+        return channel.send({
+          embeds: [EmbedManager.info('🏓 Pong!',
+            `**Latenza Bot:** ${latency}ms\n**Latenza API:** ${apiLatency}ms`
+          )]
+        });
+      }
+
+      case 'uptime': {
+        const uptimeMs = Date.now() - botStartTime;
+        const seconds = Math.floor(uptimeMs / 1000);
+        const days = Math.floor(seconds / 86400);
+        const hours = Math.floor((seconds % 86400) / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const secs = seconds % 60;
+
+        const parts = [];
+        if (days > 0) parts.push(`${days}g`);
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0) parts.push(`${minutes}m`);
+        parts.push(`${secs}s`);
+
+        return channel.send({
+          embeds: [EmbedManager.info('⏱️ Uptime',
+            `Il bot è online da: **${parts.join(' ')}**`
+          )]
+        });
       }
 
       case 'kick': {
@@ -1885,6 +1921,37 @@ async function handleSlashCommand(interaction) {
       if (!hasStaffOrAdmin(member))
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       return showStats(interaction, true);
+
+    case 'ping': {
+      const latency = Date.now() - interaction.createdTimestamp;
+      const apiLatency = Math.round(client.ws.ping);
+      return interaction.reply({
+        embeds: [EmbedManager.info('🏓 Pong!',
+          `**Latenza Bot:** ${latency}ms\n**Latenza API:** ${apiLatency}ms`
+        )]
+      });
+    }
+
+    case 'uptime': {
+      const uptimeMs = Date.now() - botStartTime;
+      const seconds = Math.floor(uptimeMs / 1000);
+      const days = Math.floor(seconds / 86400);
+      const hours = Math.floor((seconds % 86400) / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const secs = seconds % 60;
+
+      const parts = [];
+      if (days > 0) parts.push(`${days}g`);
+      if (hours > 0) parts.push(`${hours}h`);
+      if (minutes > 0) parts.push(`${minutes}m`);
+      parts.push(`${secs}s`);
+
+      return interaction.reply({
+        embeds: [EmbedManager.info('⏱️ Uptime',
+          `Il bot è online da: **${parts.join(' ')}**`
+        )]
+      });
+    }
 
     case 'ticketpanel': {
       if (!isAdmin(member))
