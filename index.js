@@ -148,7 +148,8 @@ function buildResultEmbed(result, defaultTitle = 'Risultato') {
   const isError = msg.includes('❌') || result?.success === false;
 
   const cleanText = msg.replace(/^[✅❌⚠️🧹🔒🔓🏓⏱️]️?\s*/u, '').trim();
-  const title = isSuccess ? `✅ ${defaultTitle}` : isError ? `❌ ${defaultTitle}` : `ℹ️ ${defaultTitle}`;
+ const customTitle = result && result.title ? result.title : defaultTitle;
+const title = isSuccess ? `✅ ${customTitle}` : isError ? `❌ ${customTitle}` : `ℹ️ ${customTitle}`;
   const color = isSuccess ? 0x00FF00 : isError ? 0xFF0000 : 0x0099FF;
 
   return EmbedManager.createEmbed({
