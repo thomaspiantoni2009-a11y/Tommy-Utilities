@@ -34,6 +34,7 @@ let features = [];
 try {
   features = require('./features');
   ...
+
 // ==================== LOGGER ====================
 const log = {
   info: (msg) => console.log(`\x1b[36m[INFO]\x1b[0m ${msg}`),
