@@ -14,6 +14,9 @@ const {
   REST,
   Routes
 } = require('discord.js');
+features = require('./features')
+
+
 
 const StorageService = require('./storage');
 
