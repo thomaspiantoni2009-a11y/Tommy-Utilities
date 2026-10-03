@@ -248,26 +248,31 @@ async function createTicket(source, user) {
         embeds: [EmbedManager.error('Ticket Esistente', `Hai già un ticket aperto: ${existing}`)],
         ephemeral: true
       }, isSlash);
-       ]
-  }
-];
-if (adminRole) {
-  overwrites.push({
-    id: adminRole.id,
-    allow: [
-      PermissionsBitField.Flags.ViewChannel,
-      PermissionsBitField.Flags.SendMessages,
-      PermissionsBitField.Flags.ReadMessageHistory,
-      PermissionsBitField.Flags.ManageMessages,
-      PermissionsBitField.Flags.AttachFiles,
-      PermissionsBitField.Flags.EmbedLinks
-    ]
-  });
-}
+    }
+
+    // Trova tutti i ruoli staff (Staff, Admin, Senior Admin)
+    const staffRoles = guild.roles.cache.filter(r =>
+      ['Staff', 'Admin', 'Senior Admin'].includes(r.name)
+    );
+
+    const overwrites = [
+      { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+      {
+        id: user.id,
+        allow: [
+          PermissionsBitField.Flags.ViewChannel,
+          PermissionsBitField.Flags.SendMessages,
+          PermissionsBitField.Flags.ReadMessageHistory,
+          PermissionsBitField.Flags.AttachFiles,
+          PermissionsBitField.Flags.EmbedLinks
+        ]
+      }
     ];
-    if (adminRole) {
+
+    // Aggiungi TUTTI i ruoli staff come spettatori
+    for (const role of staffRoles.values()) {
       overwrites.push({
-        id: adminRole.id,
+        id: role.id,
         allow: [
           PermissionsBitField.Flags.ViewChannel,
           PermissionsBitField.Flags.SendMessages,
@@ -2051,7 +2056,6 @@ async function handleSlashCommand(interaction) {
     case 'blacklist': {
       const sub = interaction.options.getSubcommand();
 
-      // list e check → Staff
       if (sub === 'list') {
         if (!hasStaffOrAdmin(member))
           return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
@@ -2063,7 +2067,6 @@ async function handleSlashCommand(interaction) {
         return checkBlacklist(interaction, interaction.options.getUser('utente'), true);
       }
 
-      // add e remove → Solo Admin
       if (sub === 'add') {
         if (!isAdmin(member))
           return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')], ephemeral: true });
