@@ -29,6 +29,11 @@ if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 if (!CLIENT_ID) throw new Error('CLIENT_ID mancante nel file .env');
 if (!MOD_LOG_CHANNEL_ID) throw new Error('MOD_LOG_CHANNEL_ID mancante nel file .env');
 
+// ==================== FEATURES ====================
+let features = [];
+try {
+  features = require('./features');
+  ...
 // ==================== LOGGER ====================
 const log = {
   info: (msg) => console.log(`\x1b[36m[INFO]\x1b[0m ${msg}`),
