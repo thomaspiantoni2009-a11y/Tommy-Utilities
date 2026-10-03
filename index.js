@@ -29,11 +29,6 @@ if (!TOKEN) throw new Error('TOKEN mancante nel file .env');
 if (!CLIENT_ID) throw new Error('CLIENT_ID mancante nel file .env');
 if (!MOD_LOG_CHANNEL_ID) throw new Error('MOD_LOG_CHANNEL_ID mancante nel file .env');
 
-// ==================== FEATURES ====================
-let features = [];
-try {
-  features = require('./features');
-
 // ==================== LOGGER ====================
 const log = {
   info: (msg) => console.log(`\x1b[36m[INFO]\x1b[0m ${msg}`),
@@ -258,7 +253,6 @@ async function createTicket(source, user) {
       }, isSlash);
     }
 
-    // Trova tutti i ruoli staff (Staff, Admin, Senior Admin)
     const staffRoles = guild.roles.cache.filter(r =>
       ['Staff', 'Admin', 'Senior Admin'].includes(r.name)
     );
@@ -277,7 +271,6 @@ async function createTicket(source, user) {
       }
     ];
 
-    // Aggiungi TUTTI i ruoli staff come spettatori
     for (const role of staffRoles.values()) {
       overwrites.push({
         id: role.id,
@@ -1458,7 +1451,6 @@ async function registerSlashCommands(clientId, token) {
   }
 
   try {
-    // STEP 1: PULIZIA — cancella tutti i comandi esistenti
     log.info('🧹 Pulizia comandi esistenti...');
 
     try {
@@ -1480,7 +1472,6 @@ async function registerSlashCommands(clientId, token) {
     log.info('⏳ Attesa 2 secondi...');
     await new Promise(r => setTimeout(r, 2000));
 
-    // STEP 2: REGISTRAZIONE — registra i comandi puliti
     if (GUILD_ID) {
       log.info(`Registrazione ISTANTANEA sul server ${GUILD_ID}...`);
       await rest.put(
@@ -1784,7 +1775,6 @@ async function handlePrefixCommand(message) {
       case 'blacklist': {
         const sub = args.shift()?.toLowerCase();
 
-        // Sub: list e check → Staff o superiore
         if (sub === 'list') {
           if (!hasStaffOrAdmin(member))
             return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
@@ -1802,7 +1792,6 @@ async function handlePrefixCommand(message) {
           return checkBlacklist(message, target, false);
         }
 
-        // Sub: add e remove → Solo Admin
         if (sub === 'add') {
           if (!isAdmin(member))
             return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
@@ -1826,7 +1815,6 @@ async function handlePrefixCommand(message) {
           return removeBlacklist(message, target, message.author, false);
         }
 
-        // Default: mostra help
         if (!hasStaffOrAdmin(member))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
         return message.reply({
@@ -2226,32 +2214,7 @@ async function handleButton(interaction) {
   if (interaction.customId === 'create_lobby') return createLobby(interaction);
 }
 
-// ==================== EVENTS ====================
-client.once(Events.ClientReady, () => {
-  log.ok(`Bot online come ${client.user.tag}`);
-  log.info(`Slash commands preparati: ${slashCommands.length}`);
-  log.info(`Prefix: - & (es. -help, -ticket, -warn @user)`);
-});
-
-client.on(Events.InteractionCreate, async (interaction) => {
-  try {
-    if (interaction.isChatInputCommand()) await handleSlashCommand(interaction);
-    else if (interaction.isButton()) await handleButton(interaction);
-  } catch (err) {
-    log.err('interaction', err);
-    const embed = EmbedManager.error('Errore', "Errore durante l'interazione.");
-    if (interaction.replied || interaction.deferred) await interaction.followUp({ embeds: [embed], ephemeral: true }).catch(() => {});
-    else await interaction.reply({ embeds: [embed], ephemeral: true }).catch(() => {});
-  }
-});
-
-client.on(Events.MessageCreate, handlePrefixCommand);
-client.on(Events.GuildMemberAdd, handleGuildMemberAdd);
-
-process.on('unhandledRejection', (err) => log.err('unhandledRejection', err));
-process.on('uncaughtException', (err) => log.err('uncaughtException', err));
-
-// ==================== FEATURES ====================
+// ==================== FEATURES (DEVE STARE PRIMA DEGLI EVENTI) ====================
 let features = [];
 try {
   features = require('./features');
@@ -2280,6 +2243,56 @@ try {
   log.err('Dettagli', err);
 }
 
+// ==================== EVENTS ====================
+client.once(Events.ClientReady, () => {
+  log.ok(`Bot online come ${client.user.tag}`);
+  log.info(`Slash commands preparati: ${slashCommands.length}`);
+  log.info(`Prefix: - & (es. -help, -ticket, -warn @user)`);
+});
+
+client.on(Events.InteractionCreate, async (interaction) => {
+  try {
+    if (interaction.isChatInputCommand()) {
+      for (const feature of features) {
+        if (
+          feature.handleSlash &&
+          feature.slashCommands?.some(c => c.name === interaction.commandName)
+        ) {
+          const ctx = {
+            client, storage, log, EmbedManager,
+            safeReply, safeReplySource, hasStaffOrAdmin, isAdmin
+          };
+          return await feature.handleSlash(interaction, ctx);
+        }
+      }
+      await handleSlashCommand(interaction);
+    } else if (interaction.isButton()) {
+      for (const feature of features) {
+        if (feature.handleButton) {
+          const ctx = {
+            client, storage, log, EmbedManager,
+            safeReply, safeReplySource, hasStaffOrAdmin, isAdmin
+          };
+          const handled = await feature.handleButton(interaction, ctx);
+          if (handled) return;
+        }
+      }
+      await handleButton(interaction);
+    }
+  } catch (err) {
+    log.err('interaction', err);
+    const embed = EmbedManager.error('Errore', "Errore durante l'interazione.");
+    if (interaction.replied || interaction.deferred) await interaction.followUp({ embeds: [embed], ephemeral: true }).catch(() => {});
+    else await interaction.reply({ embeds: [embed], ephemeral: true }).catch(() => {});
+  }
+});
+
+client.on(Events.MessageCreate, handlePrefixCommand);
+client.on(Events.GuildMemberAdd, handleGuildMemberAdd);
+
+process.on('unhandledRejection', (err) => log.err('unhandledRejection', err));
+process.on('uncaughtException', (err) => log.err('uncaughtException', err));
+
 // ==================== STARTUP ====================
 (async () => {
   try {
@@ -2291,3 +2304,10 @@ try {
     process.exit(1);
   }
 })();
+
+process.on('SIGINT', () => {
+  log.warn('Shutdown...');
+  storage.close();
+  client.destroy();
+  process.exit(0);
+});
