@@ -248,21 +248,22 @@ async function createTicket(source, user) {
         embeds: [EmbedManager.error('Ticket Esistente', `Hai già un ticket aperto: ${existing}`)],
         ephemeral: true
       }, isSlash);
-    }
-
-    const adminRole = guild.roles.cache.find(r => r.permissions.has(PermissionsBitField.Flags.Administrator));
-    const overwrites = [
-      { id: guild.roles.everyone.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-      {
-        id: user.id,
-        allow: [
-          PermissionsBitField.Flags.ViewChannel,
-          PermissionsBitField.Flags.SendMessages,
-          PermissionsBitField.Flags.ReadMessageHistory,
-          PermissionsBitField.Flags.AttachFiles,
-          PermissionsBitField.Flags.EmbedLinks
-        ]
-      }
+       ]
+  }
+];
+if (adminRole) {
+  overwrites.push({
+    id: adminRole.id,
+    allow: [
+      PermissionsBitField.Flags.ViewChannel,
+      PermissionsBitField.Flags.SendMessages,
+      PermissionsBitField.Flags.ReadMessageHistory,
+      PermissionsBitField.Flags.ManageMessages,
+      PermissionsBitField.Flags.AttachFiles,
+      PermissionsBitField.Flags.EmbedLinks
+    ]
+  });
+}
     ];
     if (adminRole) {
       overwrites.push({
