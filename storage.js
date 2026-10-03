@@ -62,8 +62,6 @@ class StorageService {
       );
       CREATE INDEX IF NOT EXISTS idx_notes_user ON member_notes(guild_id, user_id);
 
-      -- ===== NUOVE TABELLE PER LE FEATURES =====
-
       CREATE TABLE IF NOT EXISTS welcome_config (
         guild_id TEXT PRIMARY KEY,
         channel_id TEXT,
@@ -204,7 +202,7 @@ class StorageService {
     this._deleteNote = this.db.prepare('DELETE FROM member_notes WHERE id = ? AND guild_id = ?');
     this._countNotes = this.db.prepare('SELECT COUNT(*) as c FROM member_notes WHERE guild_id = ?');
 
-    // ===== WELCOME =====
+    // Welcome
     this._getWelcome = this.db.prepare('SELECT * FROM welcome_config WHERE guild_id = ?');
     this._setWelcome = this.db.prepare(`
       INSERT INTO welcome_config (guild_id, channel_id, message, embed_enabled, updated_at)
@@ -216,7 +214,7 @@ class StorageService {
         updated_at = excluded.updated_at
     `);
 
-    // ===== REACTION ROLES =====
+    // Reaction Roles
     this._rrInsert = this.db.prepare(`
       INSERT INTO reaction_roles (guild_id, message_id, channel_id, emoji, role_id, created_at)
       VALUES (@guildId, @messageId, @channelId, @emoji, @roleId, @createdAt)
@@ -226,7 +224,7 @@ class StorageService {
     this._rrDelete = this.db.prepare('DELETE FROM reaction_roles WHERE id = ? AND guild_id = ?');
     this._rrDeleteByMessage = this.db.prepare('DELETE FROM reaction_roles WHERE guild_id = ? AND message_id = ?');
 
-    // ===== AUTORESPONSES =====
+    // Autoresponses
     this._arInsert = this.db.prepare(`
       INSERT INTO autoresponses (guild_id, trigger, response, created_at)
       VALUES (@guildId, @trigger, @response, @createdAt)
@@ -235,7 +233,7 @@ class StorageService {
     this._arByTrigger = this.db.prepare('SELECT * FROM autoresponses WHERE guild_id = ? AND trigger = ?');
     this._arDelete = this.db.prepare('DELETE FROM autoresponses WHERE id = ? AND guild_id = ?');
 
-    // ===== BIRTHDAYS =====
+    // Birthdays
     this._bdSet = this.db.prepare(`
       INSERT INTO birthdays (user_id, guild_id, day, month, year, updated_at)
       VALUES (@userId, @guildId, @day, @month, @year, @updatedAt)
@@ -251,7 +249,7 @@ class StorageService {
     this._bdAll = this.db.prepare('SELECT * FROM birthdays WHERE guild_id = ? ORDER BY month, day');
     this._bdDelete = this.db.prepare('DELETE FROM birthdays WHERE user_id = ? AND guild_id = ?');
 
-    // ===== REMINDERS =====
+    // Reminders
     this._remInsert = this.db.prepare(`
       INSERT INTO reminders (user_id, guild_id, channel_id, content, remind_at, created_at)
       VALUES (@userId, @guildId, @channelId, @content, @remindAt, @createdAt)
@@ -260,7 +258,7 @@ class StorageService {
     this._remDelete = this.db.prepare('DELETE FROM reminders WHERE id = ?');
     this._remByUser = this.db.prepare('SELECT * FROM reminders WHERE user_id = ? AND guild_id = ? ORDER BY remind_at ASC');
 
-    // ===== PERSONAL NOTES =====
+    // Personal notes
     this._pnInsert = this.db.prepare(`
       INSERT INTO personal_notes (user_id, guild_id, content, created_at)
       VALUES (@userId, @guildId, @content, @createdAt)
@@ -268,7 +266,7 @@ class StorageService {
     this._pnByUser = this.db.prepare('SELECT * FROM personal_notes WHERE user_id = ? AND guild_id = ? ORDER BY id DESC');
     this._pnDelete = this.db.prepare('DELETE FROM personal_notes WHERE id = ? AND user_id = ?');
 
-    // ===== CASES =====
+    // Cases
     this._caseInsert = this.db.prepare(`
       INSERT INTO cases (guild_id, user_id, moderator_id, action, reason, duration, status, created_at, updated_at)
       VALUES (@guildId, @userId, @moderatorId, @action, @reason, @duration, 'active', @now, @now)
@@ -283,7 +281,7 @@ class StorageService {
     `);
     this._caseDelete = this.db.prepare('DELETE FROM cases WHERE id = ? AND guild_id = ?');
 
-    // ===== REPORTS =====
+    // Reports
     this._repInsert = this.db.prepare(`
       INSERT INTO reports (guild_id, reporter_id, target_id, reason, status, created_at)
       VALUES (@guildId, @reporterId, @targetId, @reason, 'open', @createdAt)
@@ -298,15 +296,9 @@ class StorageService {
   loadCommands() {
     return Object.fromEntries(this._allCmds.all().map(r => [r.name, r.response]));
   }
-  getCommand(name) {
-    return this._getCmd.get(name)?.response ?? null;
-  }
-  saveCommand(name, response) {
-    this._upsertCmd.run(name, response, new Date().toISOString());
-  }
-  deleteCommand(name) {
-    return this._delCmd.run(name).changes > 0;
-  }
+  getCommand(name) { return this._getCmd.get(name)?.response ?? null; }
+  saveCommand(name, response) { this._upsertCmd.run(name, response, new Date().toISOString()); }
+  deleteCommand(name) { return this._delCmd.run(name).changes > 0; }
 
   // ===== Mod Logs =====
   saveLog(entry) {
@@ -326,93 +318,53 @@ class StorageService {
       console.error('❌ saveLog error:', err);
     }
   }
-  getLogsForUser(userId) {
-    return this._logsByTarget.all(userId);
-  }
+  getLogsForUser(userId) { return this._logsByTarget.all(userId); }
   getStats() {
-    const total = this._countLogs.get().c;
-    const byType = this._countByType.all();
-    const blacklist = this._blCount.get().c;
-    return { total, byType, blacklist };
+    return {
+      total: this._countLogs.get().c,
+      byType: this._countByType.all(),
+      blacklist: this._blCount.get().c
+    };
   }
 
   // ===== Blacklist =====
-  isBlacklisted(userId) {
-    return !!this._blGet.get(userId);
-  }
-  getBlacklistEntry(userId) {
-    return this._blGet.get(userId) || null;
-  }
-  getAllBlacklist() {
-    return this._blAll.all();
-  }
+  isBlacklisted(userId) { return !!this._blGet.get(userId); }
+  getBlacklistEntry(userId) { return this._blGet.get(userId) || null; }
+  getAllBlacklist() { return this._blAll.all(); }
   addToBlacklist(userId, username, reason, moderatorId, moderatorTag) {
     if (this.isBlacklisted(userId)) return false;
-    this._blInsert.run({
-      userId, username, reason, moderatorId, moderatorTag,
-      addedAt: new Date().toISOString()
-    });
+    this._blInsert.run({ userId, username, reason, moderatorId, moderatorTag, addedAt: new Date().toISOString() });
     return true;
   }
-  removeFromBlacklist(userId) {
-    return this._blDelete.run(userId).changes > 0;
-  }
+  removeFromBlacklist(userId) { return this._blDelete.run(userId).changes > 0; }
 
   // ===== Guild Config =====
   getGuildConfig(guildId) {
     return this._getConfig.get(guildId) || { guild_id: guildId, autorole_id: null, log_channel_id: null };
   }
   setAutorole(guildId, roleId) {
-    this._upsertConfig.run({
-      guildId,
-      autoroleId: roleId,
-      logChannelId: null,
-      updatedAt: new Date().toISOString()
-    });
+    this._upsertConfig.run({ guildId, autoroleId: roleId, logChannelId: null, updatedAt: new Date().toISOString() });
   }
   clearAutorole(guildId) {
     const current = this.getGuildConfig(guildId);
-    this._upsertConfig.run({
-      guildId,
-      autoroleId: null,
-      logChannelId: current.log_channel_id,
-      updatedAt: new Date().toISOString()
-    });
+    this._upsertConfig.run({ guildId, autoroleId: null, logChannelId: current.log_channel_id, updatedAt: new Date().toISOString() });
   }
   setLogChannel(guildId, channelId) {
-    this._upsertConfig.run({
-      guildId,
-      autoroleId: null,
-      logChannelId: channelId,
-      updatedAt: new Date().toISOString()
-    });
+    this._upsertConfig.run({ guildId, autoroleId: null, logChannelId: channelId, updatedAt: new Date().toISOString() });
   }
 
   // ===== Member Notes =====
   addNote(guildId, userId, authorId, authorTag, content) {
-    const res = this._insertNote.run({
-      guildId, userId, authorId, authorTag, content,
-      createdAt: new Date().toISOString()
-    });
+    const res = this._insertNote.run({ guildId, userId, authorId, authorTag, content, createdAt: new Date().toISOString() });
     return res.lastInsertRowid;
   }
-  getNotesForUser(guildId, userId) {
-    return this._notesForUser.all(guildId, userId);
-  }
-  getNote(guildId, noteId) {
-    return this._getNote.get(noteId, guildId) || null;
-  }
-  deleteNote(guildId, noteId) {
-    return this._deleteNote.run(noteId, guildId).changes > 0;
-  }
-  countNotes(guildId) {
-    return this._countNotes.get(guildId).c;
-  }
+  getNotesForUser(guildId, userId) { return this._notesForUser.all(guildId, userId); }
+  getNote(guildId, noteId) { return this._getNote.get(noteId, guildId) || null; }
+  deleteNote(guildId, noteId) { return this._deleteNote.run(noteId, guildId).changes > 0; }
+  countNotes(guildId) { return this._countNotes.get(guildId).c; }
 
   // ===== Welcome =====
-  getWelcomeConfig(guildId) {
-    return this._getWelcome.get(guildId) || null;
-  }
+  getWelcomeConfig(guildId) { return this._getWelcome.get(guildId) || null; }
   setWelcomeConfig(guildId, { channelId, message, embedEnabled }) {
     this._setWelcome.run({
       guildId,
@@ -427,49 +379,27 @@ class StorageService {
   addReactionRole(guildId, messageId, channelId, emoji, roleId) {
     this._rrInsert.run({ guildId, messageId, channelId, emoji, roleId, createdAt: new Date().toISOString() });
   }
-  getReactionRolesForMessage(guildId, messageId) {
-    return this._rrByMessage.all(guildId, messageId);
-  }
-  getReactionRoleByEmoji(guildId, messageId, emoji) {
-    return this._rrByEmoji.get(guildId, messageId, emoji) || null;
-  }
-  deleteReactionRole(guildId, id) {
-    return this._rrDelete.run(id, guildId).changes > 0;
-  }
-  deleteReactionRolesForMessage(guildId, messageId) {
-    return this._rrDeleteByMessage.run(guildId, messageId).changes > 0;
-  }
+  getReactionRolesForMessage(guildId, messageId) { return this._rrByMessage.all(guildId, messageId); }
+  getReactionRoleByEmoji(guildId, messageId, emoji) { return this._rrByEmoji.get(guildId, messageId, emoji) || null; }
+  deleteReactionRole(guildId, id) { return this._rrDelete.run(id, guildId).changes > 0; }
+  deleteReactionRolesForMessage(guildId, messageId) { return this._rrDeleteByMessage.run(guildId, messageId).changes > 0; }
 
   // ===== Autoresponses =====
   addAutoresponse(guildId, trigger, response) {
     this._arInsert.run({ guildId, trigger: trigger.toLowerCase(), response, createdAt: new Date().toISOString() });
   }
-  getAllAutoresponses(guildId) {
-    return this._arAll.all(guildId);
-  }
-  getAutoresponseByTrigger(guildId, trigger) {
-    return this._arByTrigger.get(guildId, trigger.toLowerCase()) || null;
-  }
-  deleteAutoresponse(guildId, id) {
-    return this._arDelete.run(id, guildId).changes > 0;
-  }
+  getAllAutoresponses(guildId) { return this._arAll.all(guildId); }
+  getAutoresponseByTrigger(guildId, trigger) { return this._arByTrigger.get(guildId, trigger.toLowerCase()) || null; }
+  deleteAutoresponse(guildId, id) { return this._arDelete.run(id, guildId).changes > 0; }
 
   // ===== Birthdays =====
   setBirthday(userId, guildId, day, month, year) {
     this._bdSet.run({ userId, guildId, day, month, year: year || null, updatedAt: new Date().toISOString() });
   }
-  getBirthday(userId, guildId) {
-    return this._bdGet.get(userId, guildId) || null;
-  }
-  getBirthdaysToday(guildId, day, month) {
-    return this._bdToday.all(guildId, day, month);
-  }
-  getAllBirthdays(guildId) {
-    return this._bdAll.all(guildId);
-  }
-  deleteBirthday(userId, guildId) {
-    return this._bdDelete.run(userId, guildId).changes > 0;
-  }
+  getBirthday(userId, guildId) { return this._bdGet.get(userId, guildId) || null; }
+  getBirthdaysToday(guildId, day, month) { return this._bdToday.all(guildId, day, month); }
+  getAllBirthdays(guildId) { return this._bdAll.all(guildId); }
+  deleteBirthday(userId, guildId) { return this._bdDelete.run(userId, guildId).changes > 0; }
 
   // ===== Reminders =====
   addReminder(userId, guildId, channelId, content, remindAt) {
@@ -480,27 +410,17 @@ class StorageService {
     });
     return res.lastInsertRowid;
   }
-  getDueReminders(now = new Date()) {
-    return this._remDue.all(now.toISOString());
-  }
-  deleteReminder(id) {
-    return this._remDelete.run(id).changes > 0;
-  }
-  getRemindersForUser(userId, guildId) {
-    return this._remByUser.all(userId, guildId);
-  }
+  getDueReminders(now = new Date()) { return this._remDue.all(now.toISOString()); }
+  deleteReminder(id) { return this._remDelete.run(id).changes > 0; }
+  getRemindersForUser(userId, guildId) { return this._remByUser.all(userId, guildId); }
 
   // ===== Personal Notes =====
   addPersonalNote(userId, guildId, content) {
     const res = this._pnInsert.run({ userId, guildId, content, createdAt: new Date().toISOString() });
     return res.lastInsertRowid;
   }
-  getPersonalNotes(userId, guildId) {
-    return this._pnByUser.all(userId, guildId);
-  }
-  deletePersonalNote(id, userId) {
-    return this._pnDelete.run(id, userId).changes > 0;
-  }
+  getPersonalNotes(userId, guildId) { return this._pnByUser.all(userId, guildId); }
+  deletePersonalNote(id, userId) { return this._pnDelete.run(id, userId).changes > 0; }
 
   // ===== Cases =====
   addCase(guildId, userId, moderatorId, action, reason, duration) {
@@ -508,12 +428,8 @@ class StorageService {
     const res = this._caseInsert.run({ guildId, userId, moderatorId, action, reason, duration, now });
     return res.lastInsertRowid;
   }
-  getCase(guildId, id) {
-    return this._caseGet.get(id, guildId) || null;
-  }
-  getCasesForUser(guildId, userId) {
-    return this._caseByUser.all(guildId, userId);
-  }
+  getCase(guildId, id) { return this._caseGet.get(id, guildId) || null; }
+  getCasesForUser(guildId, userId) { return this._caseByUser.all(guildId, userId); }
   updateCase(guildId, id, { reason, status }) {
     this._caseUpdate.run({
       reason: reason || null,
@@ -521,25 +437,17 @@ class StorageService {
       now: new Date().toISOString()
     }, id, guildId);
   }
-  deleteCase(guildId, id) {
-    return this._caseDelete.run(id, guildId).changes > 0;
-  }
+  deleteCase(guildId, id) { return this._caseDelete.run(id, guildId).changes > 0; }
 
   // ===== Reports =====
   addReport(guildId, reporterId, targetId, reason) {
     const res = this._repInsert.run({ guildId, reporterId, targetId, reason, createdAt: new Date().toISOString() });
     return res.lastInsertRowid;
   }
-  getOpenReports(guildId) {
-    return this._repAllOpen.all(guildId);
-  }
-  setReportStatus(guildId, id, status) {
-    return this._repSetStatus.run(status, id, guildId).changes > 0;
-  }
+  getOpenReports(guildId) { return this._repAllOpen.all(guildId); }
+  setReportStatus(guildId, id, status) { return this._repSetStatus.run(status, id, guildId).changes > 0; }
 
-  close() {
-    this.db.close();
-  }
+  close() { this.db.close(); }
 }
 
 module.exports = StorageService;
