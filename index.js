@@ -2252,6 +2252,35 @@ client.on(Events.GuildMemberAdd, handleGuildMemberAdd);
 process.on('unhandledRejection', (err) => log.err('unhandledRejection', err));
 process.on('uncaughtException', (err) => log.err('uncaughtException', err));
 
+// ==================== FEATURES ====================
+let features = [];
+try {
+  features = require('./features');
+  log.ok(`📦 Caricamento ${features.length} feature(s)...`);
+  const ctx = {
+    client,
+    storage,
+    log,
+    EmbedManager,
+    safeReply,
+    safeReplySource,
+    hasStaffOrAdmin,
+    isAdmin
+  };
+  for (const feature of features) {
+    if (feature.setup) {
+      feature.setup(ctx);
+      log.ok(`   ✅ Feature "${feature.name}" caricata`);
+    }
+    if (Array.isArray(feature.slashCommands)) {
+      slashCommands.push(...feature.slashCommands);
+    }
+  }
+} catch (err) {
+  log.warn('⚠️ features.js non trovato o non valido. Il bot parte senza feature extra.');
+  log.err('Dettagli', err);
+}
+
 // ==================== STARTUP ====================
 (async () => {
   try {
@@ -2263,10 +2292,3 @@ process.on('uncaughtException', (err) => log.err('uncaughtException', err));
     process.exit(1);
   }
 })();
-
-process.on('SIGINT', () => {
-  log.warn('Shutdown...');
-  storage.close();
-  client.destroy();
-  process.exit(0);
-});
