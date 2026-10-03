@@ -61,6 +61,90 @@ class StorageService {
         created_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_notes_user ON member_notes(guild_id, user_id);
+
+      -- ===== NUOVE TABELLE PER LE FEATURES =====
+
+      CREATE TABLE IF NOT EXISTS welcome_config (
+        guild_id TEXT PRIMARY KEY,
+        channel_id TEXT,
+        message TEXT,
+        embed_enabled INTEGER DEFAULT 1,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS reaction_roles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_rr_message ON reaction_roles(guild_id, message_id);
+
+      CREATE TABLE IF NOT EXISTS autoresponses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        trigger TEXT NOT NULL,
+        response TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_ar_trigger ON autoresponses(guild_id, trigger);
+
+      CREATE TABLE IF NOT EXISTS birthdays (
+        user_id TEXT PRIMARY KEY,
+        guild_id TEXT NOT NULL,
+        day INTEGER NOT NULL,
+        month INTEGER NOT NULL,
+        year INTEGER,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS reminders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        remind_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_remind_at ON reminders(remind_at);
+
+      CREATE TABLE IF NOT EXISTS personal_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_pnotes_user ON personal_notes(guild_id, user_id);
+
+      CREATE TABLE IF NOT EXISTS cases (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        moderator_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        reason TEXT,
+        duration TEXT,
+        status TEXT DEFAULT 'active',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_cases_user ON cases(guild_id, user_id);
+
+      CREATE TABLE IF NOT EXISTS reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        guild_id TEXT NOT NULL,
+        reporter_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        status TEXT DEFAULT 'open',
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_reports_guild ON reports(guild_id, status);
     `);
   }
 
@@ -119,6 +203,93 @@ class StorageService {
     this._getNote = this.db.prepare('SELECT * FROM member_notes WHERE id = ? AND guild_id = ?');
     this._deleteNote = this.db.prepare('DELETE FROM member_notes WHERE id = ? AND guild_id = ?');
     this._countNotes = this.db.prepare('SELECT COUNT(*) as c FROM member_notes WHERE guild_id = ?');
+
+    // ===== WELCOME =====
+    this._getWelcome = this.db.prepare('SELECT * FROM welcome_config WHERE guild_id = ?');
+    this._setWelcome = this.db.prepare(`
+      INSERT INTO welcome_config (guild_id, channel_id, message, embed_enabled, updated_at)
+      VALUES (@guildId, @channelId, @message, @embedEnabled, @updatedAt)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        channel_id = COALESCE(excluded.channel_id, channel_id),
+        message = COALESCE(excluded.message, message),
+        embed_enabled = excluded.embed_enabled,
+        updated_at = excluded.updated_at
+    `);
+
+    // ===== REACTION ROLES =====
+    this._rrInsert = this.db.prepare(`
+      INSERT INTO reaction_roles (guild_id, message_id, channel_id, emoji, role_id, created_at)
+      VALUES (@guildId, @messageId, @channelId, @emoji, @roleId, @createdAt)
+    `);
+    this._rrByMessage = this.db.prepare('SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ?');
+    this._rrByEmoji = this.db.prepare('SELECT * FROM reaction_roles WHERE guild_id = ? AND message_id = ? AND emoji = ?');
+    this._rrDelete = this.db.prepare('DELETE FROM reaction_roles WHERE id = ? AND guild_id = ?');
+    this._rrDeleteByMessage = this.db.prepare('DELETE FROM reaction_roles WHERE guild_id = ? AND message_id = ?');
+
+    // ===== AUTORESPONSES =====
+    this._arInsert = this.db.prepare(`
+      INSERT INTO autoresponses (guild_id, trigger, response, created_at)
+      VALUES (@guildId, @trigger, @response, @createdAt)
+    `);
+    this._arAll = this.db.prepare('SELECT * FROM autoresponses WHERE guild_id = ? ORDER BY id DESC');
+    this._arByTrigger = this.db.prepare('SELECT * FROM autoresponses WHERE guild_id = ? AND trigger = ?');
+    this._arDelete = this.db.prepare('DELETE FROM autoresponses WHERE id = ? AND guild_id = ?');
+
+    // ===== BIRTHDAYS =====
+    this._bdSet = this.db.prepare(`
+      INSERT INTO birthdays (user_id, guild_id, day, month, year, updated_at)
+      VALUES (@userId, @guildId, @day, @month, @year, @updatedAt)
+      ON CONFLICT(user_id) DO UPDATE SET
+        guild_id = excluded.guild_id,
+        day = excluded.day,
+        month = excluded.month,
+        year = excluded.year,
+        updated_at = excluded.updated_at
+    `);
+    this._bdGet = this.db.prepare('SELECT * FROM birthdays WHERE user_id = ? AND guild_id = ?');
+    this._bdToday = this.db.prepare('SELECT * FROM birthdays WHERE guild_id = ? AND day = ? AND month = ?');
+    this._bdAll = this.db.prepare('SELECT * FROM birthdays WHERE guild_id = ? ORDER BY month, day');
+    this._bdDelete = this.db.prepare('DELETE FROM birthdays WHERE user_id = ? AND guild_id = ?');
+
+    // ===== REMINDERS =====
+    this._remInsert = this.db.prepare(`
+      INSERT INTO reminders (user_id, guild_id, channel_id, content, remind_at, created_at)
+      VALUES (@userId, @guildId, @channelId, @content, @remindAt, @createdAt)
+    `);
+    this._remDue = this.db.prepare('SELECT * FROM reminders WHERE remind_at <= ?');
+    this._remDelete = this.db.prepare('DELETE FROM reminders WHERE id = ?');
+    this._remByUser = this.db.prepare('SELECT * FROM reminders WHERE user_id = ? AND guild_id = ? ORDER BY remind_at ASC');
+
+    // ===== PERSONAL NOTES =====
+    this._pnInsert = this.db.prepare(`
+      INSERT INTO personal_notes (user_id, guild_id, content, created_at)
+      VALUES (@userId, @guildId, @content, @createdAt)
+    `);
+    this._pnByUser = this.db.prepare('SELECT * FROM personal_notes WHERE user_id = ? AND guild_id = ? ORDER BY id DESC');
+    this._pnDelete = this.db.prepare('DELETE FROM personal_notes WHERE id = ? AND user_id = ?');
+
+    // ===== CASES =====
+    this._caseInsert = this.db.prepare(`
+      INSERT INTO cases (guild_id, user_id, moderator_id, action, reason, duration, status, created_at, updated_at)
+      VALUES (@guildId, @userId, @moderatorId, @action, @reason, @duration, 'active', @now, @now)
+    `);
+    this._caseGet = this.db.prepare('SELECT * FROM cases WHERE id = ? AND guild_id = ?');
+    this._caseByUser = this.db.prepare('SELECT * FROM cases WHERE guild_id = ? AND user_id = ? ORDER BY id DESC');
+    this._caseUpdate = this.db.prepare(`
+      UPDATE cases SET reason = COALESCE(@reason, reason),
+                       status = COALESCE(@status, status),
+                       updated_at = @now
+      WHERE id = ? AND guild_id = ?
+    `);
+    this._caseDelete = this.db.prepare('DELETE FROM cases WHERE id = ? AND guild_id = ?');
+
+    // ===== REPORTS =====
+    this._repInsert = this.db.prepare(`
+      INSERT INTO reports (guild_id, reporter_id, target_id, reason, status, created_at)
+      VALUES (@guildId, @reporterId, @targetId, @reason, 'open', @createdAt)
+    `);
+    this._repAllOpen = this.db.prepare("SELECT * FROM reports WHERE guild_id = ? AND status = 'open' ORDER BY id DESC");
+    this._repSetStatus = this.db.prepare('UPDATE reports SET status = ? WHERE id = ? AND guild_id = ?');
 
     this._logCounter = 0;
   }
@@ -236,6 +407,134 @@ class StorageService {
   }
   countNotes(guildId) {
     return this._countNotes.get(guildId).c;
+  }
+
+  // ===== Welcome =====
+  getWelcomeConfig(guildId) {
+    return this._getWelcome.get(guildId) || null;
+  }
+  setWelcomeConfig(guildId, { channelId, message, embedEnabled }) {
+    this._setWelcome.run({
+      guildId,
+      channelId: channelId || null,
+      message: message || null,
+      embedEnabled: embedEnabled === false ? 0 : 1,
+      updatedAt: new Date().toISOString()
+    });
+  }
+
+  // ===== Reaction Roles =====
+  addReactionRole(guildId, messageId, channelId, emoji, roleId) {
+    this._rrInsert.run({ guildId, messageId, channelId, emoji, roleId, createdAt: new Date().toISOString() });
+  }
+  getReactionRolesForMessage(guildId, messageId) {
+    return this._rrByMessage.all(guildId, messageId);
+  }
+  getReactionRoleByEmoji(guildId, messageId, emoji) {
+    return this._rrByEmoji.get(guildId, messageId, emoji) || null;
+  }
+  deleteReactionRole(guildId, id) {
+    return this._rrDelete.run(id, guildId).changes > 0;
+  }
+  deleteReactionRolesForMessage(guildId, messageId) {
+    return this._rrDeleteByMessage.run(guildId, messageId).changes > 0;
+  }
+
+  // ===== Autoresponses =====
+  addAutoresponse(guildId, trigger, response) {
+    this._arInsert.run({ guildId, trigger: trigger.toLowerCase(), response, createdAt: new Date().toISOString() });
+  }
+  getAllAutoresponses(guildId) {
+    return this._arAll.all(guildId);
+  }
+  getAutoresponseByTrigger(guildId, trigger) {
+    return this._arByTrigger.get(guildId, trigger.toLowerCase()) || null;
+  }
+  deleteAutoresponse(guildId, id) {
+    return this._arDelete.run(id, guildId).changes > 0;
+  }
+
+  // ===== Birthdays =====
+  setBirthday(userId, guildId, day, month, year) {
+    this._bdSet.run({ userId, guildId, day, month, year: year || null, updatedAt: new Date().toISOString() });
+  }
+  getBirthday(userId, guildId) {
+    return this._bdGet.get(userId, guildId) || null;
+  }
+  getBirthdaysToday(guildId, day, month) {
+    return this._bdToday.all(guildId, day, month);
+  }
+  getAllBirthdays(guildId) {
+    return this._bdAll.all(guildId);
+  }
+  deleteBirthday(userId, guildId) {
+    return this._bdDelete.run(userId, guildId).changes > 0;
+  }
+
+  // ===== Reminders =====
+  addReminder(userId, guildId, channelId, content, remindAt) {
+    const res = this._remInsert.run({
+      userId, guildId, channelId, content,
+      remindAt: remindAt.toISOString(),
+      createdAt: new Date().toISOString()
+    });
+    return res.lastInsertRowid;
+  }
+  getDueReminders(now = new Date()) {
+    return this._remDue.all(now.toISOString());
+  }
+  deleteReminder(id) {
+    return this._remDelete.run(id).changes > 0;
+  }
+  getRemindersForUser(userId, guildId) {
+    return this._remByUser.all(userId, guildId);
+  }
+
+  // ===== Personal Notes =====
+  addPersonalNote(userId, guildId, content) {
+    const res = this._pnInsert.run({ userId, guildId, content, createdAt: new Date().toISOString() });
+    return res.lastInsertRowid;
+  }
+  getPersonalNotes(userId, guildId) {
+    return this._pnByUser.all(userId, guildId);
+  }
+  deletePersonalNote(id, userId) {
+    return this._pnDelete.run(id, userId).changes > 0;
+  }
+
+  // ===== Cases =====
+  addCase(guildId, userId, moderatorId, action, reason, duration) {
+    const now = new Date().toISOString();
+    const res = this._caseInsert.run({ guildId, userId, moderatorId, action, reason, duration, now });
+    return res.lastInsertRowid;
+  }
+  getCase(guildId, id) {
+    return this._caseGet.get(id, guildId) || null;
+  }
+  getCasesForUser(guildId, userId) {
+    return this._caseByUser.all(guildId, userId);
+  }
+  updateCase(guildId, id, { reason, status }) {
+    this._caseUpdate.run({
+      reason: reason || null,
+      status: status || null,
+      now: new Date().toISOString()
+    }, id, guildId);
+  }
+  deleteCase(guildId, id) {
+    return this._caseDelete.run(id, guildId).changes > 0;
+  }
+
+  // ===== Reports =====
+  addReport(guildId, reporterId, targetId, reason) {
+    const res = this._repInsert.run({ guildId, reporterId, targetId, reason, createdAt: new Date().toISOString() });
+    return res.lastInsertRowid;
+  }
+  getOpenReports(guildId) {
+    return this._repAllOpen.all(guildId);
+  }
+  setReportStatus(guildId, id, status) {
+    return this._repSetStatus.run(status, id, guildId).changes > 0;
   }
 
   close() {
