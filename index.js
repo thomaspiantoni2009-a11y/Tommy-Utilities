@@ -2276,18 +2276,17 @@ process.on('uncaughtException', (err) => log.err('uncaughtException', err));
 // ==================== STARTUP ====================
 (async () => {
   try {
-    await registerSlashCommands(CLIENT_ID, TOKEN);
+    // 1) LOGIN PRIMA — priorità assoluta al bot online
     await client.login(TOKEN);
-    log.ok('Bot avviato con successo');
+    log.ok('✅ Bot online');
+
+    // 2) Registrazione comandi DOPO — non bloccante
+    //    Se Discord è in rate limit, fallisce ma il bot resta online
+    registerSlashCommands(CLIENT_ID, TOKEN).catch(err => {
+      log.err('❌ Registrazione comandi fallita (ma il bot è online)', err);
+    });
   } catch (err) {
-    log.err('Avvio bot', err);
+    log.err('❌ Login fallito', err);
     process.exit(1);
   }
 })();
-
-process.on('SIGINT', () => {
-  log.warn('Shutdown...');
-  storage.close();
-  client.destroy();
-  process.exit(0);
-});
