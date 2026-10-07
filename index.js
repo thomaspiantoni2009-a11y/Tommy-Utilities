@@ -1544,11 +1544,14 @@ async function handlePrefixCommand(message) {
       });
     }
 
-    // 2) Invia la risposta con allowedMentions per evitare ping indesiderati
-    return channel.send({
-      content: custom,
-      allowedMentions: { parse: [] }
-    }).catch(err => log.err('custom command send', err));
+ return channel.send({
+  content: custom,
+  allowedMentions: {
+    parse: ['users'],         // pinga solo gli utenti
+    roles: [],                 // non pingare ruoli
+    repliedUser: false         // non pingare chi ha scritto il comando
+  }
+}).catch(err => log.err('custom command send', err));
   }
 
   const cd = checkCooldown(member.id, commandName);
