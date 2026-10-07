@@ -182,13 +182,15 @@ class StorageService {
     this._blCount = this.db.prepare('SELECT COUNT(*) as c FROM blacklist');
 
     // Guild config
+    // Ogni setter passa esplicitamente TUTTI i campi (letti prima), quindi non serve COALESCE.
+    // Questo permette di cancellare davvero un valore impostandolo a null.
     this._getConfig = this.db.prepare('SELECT * FROM guild_config WHERE guild_id = ?');
     this._upsertConfig = this.db.prepare(`
       INSERT INTO guild_config (guild_id, autorole_id, log_channel_id, updated_at)
       VALUES (@guildId, @autoroleId, @logChannelId, @updatedAt)
       ON CONFLICT(guild_id) DO UPDATE SET
-        autorole_id = COALESCE(excluded.autorole_id, autorole_id),
-        log_channel_id = COALESCE(excluded.log_channel_id, log_channel_id),
+        autorole_id = excluded.autorole_id,
+        log_channel_id = excluded.log_channel_id,
         updated_at = excluded.updated_at
     `);
 
@@ -203,6 +205,7 @@ class StorageService {
     this._countNotes = this.db.prepare('SELECT COUNT(*) as c FROM member_notes WHERE guild_id = ?');
 
     // Welcome
+    // embed_enabled usa COALESCE per non sovrascrivere se non specificato.
     this._getWelcome = this.db.prepare('SELECT * FROM welcome_config WHERE guild_id = ?');
     this._setWelcome = this.db.prepare(`
       INSERT INTO welcome_config (guild_id, channel_id, message, embed_enabled, updated_at)
@@ -210,7 +213,7 @@ class StorageService {
       ON CONFLICT(guild_id) DO UPDATE SET
         channel_id = COALESCE(excluded.channel_id, channel_id),
         message = COALESCE(excluded.message, message),
-        embed_enabled = excluded.embed_enabled,
+        embed_enabled = COALESCE(excluded.embed_enabled, embed_enabled),
         updated_at = excluded.updated_at
     `);
 
@@ -343,14 +346,40 @@ class StorageService {
     return this._getConfig.get(guildId) || { guild_id: guildId, autorole_id: null, log_channel_id: null };
   }
   setAutorole(guildId, roleId) {
-    this._upsertConfig.run({ guildId, autoroleId: roleId, logChannelId: null, updatedAt: new Date().toISOString() });
+    const current = this.getGuildConfig(guildId);
+    this._upsertConfig.run({
+      guildId,
+      autoroleId: roleId,
+      logChannelId: current.log_channel_id,
+      updatedAt: new Date().toISOString()
+    });
   }
   clearAutorole(guildId) {
     const current = this.getGuildConfig(guildId);
-    this._upsertConfig.run({ guildId, autoroleId: null, logChannelId: current.log_channel_id, updatedAt: new Date().toISOString() });
+    this._upsertConfig.run({
+      guildId,
+      autoroleId: null,
+      logChannelId: current.log_channel_id,
+      updatedAt: new Date().toISOString()
+    });
   }
   setLogChannel(guildId, channelId) {
-    this._upsertConfig.run({ guildId, autoroleId: null, logChannelId: channelId, updatedAt: new Date().toISOString() });
+    const current = this.getGuildConfig(guildId);
+    this._upsertConfig.run({
+      guildId,
+      autoroleId: current.autorole_id,
+      logChannelId: channelId,
+      updatedAt: new Date().toISOString()
+    });
+  }
+  clearLogChannel(guildId) {
+    const current = this.getGuildConfig(guildId);
+    this._upsertConfig.run({
+      guildId,
+      autoroleId: current.autorole_id,
+      logChannelId: null,
+      updatedAt: new Date().toISOString()
+    });
   }
 
   // ===== Member Notes =====
@@ -370,7 +399,8 @@ class StorageService {
       guildId,
       channelId: channelId || null,
       message: message || null,
-      embedEnabled: embedEnabled === false ? 0 : 1,
+      // Se embedEnabled non è specificato (undefined), passa null → COALESCE mantiene il valore esistente
+      embedEnabled: (embedEnabled === undefined) ? null : (embedEnabled === false ? 0 : 1),
       updatedAt: new Date().toISOString()
     });
   }
