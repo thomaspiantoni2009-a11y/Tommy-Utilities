@@ -1547,7 +1547,7 @@ async function handlePrefixCommand(message) {
  return channel.send({
   content: custom,
   allowedMentions: {
-    parse: ['users'],         // pinga solo gli utenti
+    parse: ['users', 'roles', 'everyone'],
     roles: [],                 // non pingare ruoli
     repliedUser: false         // non pingare chi ha scritto il comando
   }
