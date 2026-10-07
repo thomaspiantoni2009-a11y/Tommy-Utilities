@@ -132,9 +132,15 @@ async function safeReply(interaction, data) {
 }
 
 async function safeReplySource(source, data, isSlash) {
-  if (isSlash) return safeReply(source, data);
+  if (isSlash) {
+    // Per le interazioni, ephemeral è valido; per i messaggi no.
+    return safeReply(source, data);
+  }
+  // Per i messaggi prefisso, rimuoviamo eventuali opzioni non valide
+  const payload = { ...data };
+  delete payload.ephemeral;
   try {
-    return await source.channel.send(data);
+    return await source.channel.send(payload);
   } catch (err) {
     log.err('Invio messaggio fallito', err);
     return null;
@@ -147,9 +153,10 @@ function buildResultEmbed(result, defaultTitle = 'Risultato') {
   const isSuccess = msg.includes('✅') || result?.success === true;
   const isError = msg.includes('❌') || result?.success === false;
 
-  const cleanText = msg.replace(/^[✅❌⚠️🧹🔒🔓🏓⏱️]️?\s*/u, '').trim();
- const customTitle = result && result.title ? result.title : defaultTitle;
-const title = isSuccess ? `✅ ${customTitle}` : isError ? `❌ ${customTitle}` : `ℹ️ ${customTitle}`;
+  // Regex corretta: alternanza di emoji complete (con variation selector incluso)
+  const cleanText = msg.replace(/^(✅|❌|⚠️|🧹|🔒|🔓|🏓|⏱️)\s*/u, '').trim();
+  const customTitle = result && result.title ? result.title : defaultTitle;
+  const title = isSuccess ? `✅ ${customTitle}` : isError ? `❌ ${customTitle}` : `ℹ️ ${customTitle}`;
   const color = isSuccess ? 0x00FF00 : isError ? 0xFF0000 : 0x0099FF;
 
   return EmbedManager.createEmbed({
@@ -853,7 +860,7 @@ async function showStats(source, isSlash) {
     ],
     timestamp: true
   });
-  return safeReplySource(source, { embeds: [embed], ephemeral: isSlash }, isSlash);
+  return safeReplySource(source, { embeds: [embed] }, isSlash);
 }
 
 // ==================== PURGE ====================
@@ -1253,7 +1260,7 @@ const CommandLogic = {
       return { success: false, message: '❌ Non hai il permesso "Gestisci Ruoli"!' };
 
     const targetId = extractUserId(targetUserId);
-    const roleIdMatch = extractUserId(roleId);
+    const roleIdMatch = extractRoleId(roleId); // FIX: usa extractRoleId
     if (!targetId) return { success: false, message: '❌ ID utente non valido!' };
     if (!roleIdMatch) return { success: false, message: '❌ ID ruolo non valido!' };
 
@@ -1279,7 +1286,7 @@ const CommandLogic = {
       return { success: false, message: '❌ Non hai il permesso "Gestisci Ruoli"!' };
 
     const targetId = extractUserId(targetUserId);
-    const roleIdMatch = extractUserId(roleId);
+    const roleIdMatch = extractRoleId(roleId); // FIX: usa extractRoleId
     if (!targetId) return { success: false, message: '❌ ID utente non valido!' };
     if (!roleIdMatch) return { success: false, message: '❌ ID ruolo non valido!' };
 
@@ -1626,9 +1633,9 @@ async function handlePrefixCommand(message) {
         const r = await CommandLogic.removeRole(guild, member, args[0], args[1]);
         return replyMethod({ ...r, title: 'Remove Role' });
       }
-case 'roles': {
-  const r = await CommandLogic.listRoles(guild);
-  return channel.send({ embeds: [buildResultEmbed({ ...r, title: 'Lista Ruoli' })] });
+      case 'roles': {
+        const r = await CommandLogic.listRoles(guild);
+        return channel.send({ embeds: [buildResultEmbed({ ...r, title: 'Lista Ruoli' })] });
       }
       case 'lock': {
         const r = await CommandLogic.lockChannel(channel, member, args.join(' ') || 'Nessun motivo');
@@ -2221,6 +2228,13 @@ async function handleSlashCommand(interaction) {
       const res = await CommandLogic.unlockChannel(interaction.channel, member);
       return interaction.reply({ embeds: [buildResultEmbed({ ...res, title: 'Canale Sbloccato' })], ephemeral: !res.success });
     }
+
+    default:
+      // Comando sconosciuto: rispondi per evitare "interazione fallita"
+      return safeReply(interaction, {
+        embeds: [EmbedManager.error('Comando Sconosciuto', `Il comando \`/${commandName}\` non è gestito.`)],
+        ephemeral: true
+      });
   }
 }
 
@@ -2330,7 +2344,7 @@ process.on('uncaughtException', (err) => log.err('uncaughtException', err));
 
 process.on('SIGINT', () => {
   log.warn('Shutdown...');
-  storage.close();
+  if (typeof storage.close === 'function') storage.close();
   client.destroy();
   process.exit(0);
 });
