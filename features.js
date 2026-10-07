@@ -99,7 +99,8 @@ const welcomeFeature = {
     // /welcome channel
     if (sub === 'channel') {
       const channel = interaction.options.getChannel('canale');
-      storage.setWelcomeConfig(gid, { channelId: channel.id, message: null, embedEnabled: true });
+      // Non tocchiamo message né embedEnabled: passiamo null/undefined per lasciare i valori esistenti.
+      storage.setWelcomeConfig(gid, { channelId: channel.id, message: null, embedEnabled: undefined });
       return safeReply(interaction, {
         embeds: [new EmbedBuilder().setTitle('✅ Canale Impostato').setDescription(`Benvenuto in ${channel}`).setColor(0x00FF00)],
         ephemeral: true
@@ -109,7 +110,8 @@ const welcomeFeature = {
     // /welcome message
     if (sub === 'message') {
       const testo = interaction.options.getString('testo');
-      storage.setWelcomeConfig(gid, { channelId: null, message: testo, embedEnabled: true });
+      // Non tocchiamo channel né embedEnabled: passiamo null/undefined per lasciare i valori esistenti.
+      storage.setWelcomeConfig(gid, { channelId: null, message: testo, embedEnabled: undefined });
 
       const preview = testo
         .replace(/{user}/g, interaction.user.toString())
@@ -130,6 +132,7 @@ const welcomeFeature = {
     if (sub === 'toggle') {
       const current = storage.getWelcomeConfig(gid);
       const newVal = !(current?.embed_enabled);
+      // Cambiamo solo embedEnabled, lasciamo canale e messaggio invariati.
       storage.setWelcomeConfig(gid, { channelId: null, message: null, embedEnabled: newVal });
       return safeReply(interaction, {
         embeds: [new EmbedBuilder()
@@ -171,8 +174,8 @@ const welcomeFeature = {
 
     // /welcome disable
     if (sub === 'disable') {
+      // Disattiviamo solo embed_enabled, lasciando canale e messaggio invariati.
       storage.setWelcomeConfig(gid, { channelId: null, message: null, embedEnabled: false });
-      // Nota: impostiamo solo embedEnabled, non cancelliamo davvero il canale
       return safeReply(interaction, {
         embeds: [new EmbedBuilder().setTitle('✅ Benvenuto Disattivato').setDescription('Il sistema di benvenuto è ora in pausa.').setColor(0xFFA500)],
         ephemeral: true
@@ -185,4 +188,3 @@ const welcomeFeature = {
 module.exports = [
   welcomeFeature
 ];
-
