@@ -1530,8 +1530,25 @@ async function handlePrefixCommand(message) {
 
   const { guild, channel, member } = message;
 
+  // ===== COMANDI CUSTOM =====
+  // Se il comando esiste come custom, cancelliamo il messaggio dell'utente
+  // (se il bot ha il permesso) e inviamo la risposta.
   const custom = storage.getCommand(commandName);
-  if (custom) return channel.send(custom);
+  if (custom) {
+    // 1) Cancella il messaggio dell'utente (se possibile)
+    if (channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages)) {
+      await message.delete().catch(err => {
+        // Non è un errore grave se fallisce (es. messaggio già cancellato)
+        log.warn(`Impossibile cancellare messaggio custom command: ${err.message}`);
+      });
+    }
+
+    // 2) Invia la risposta con allowedMentions per evitare ping indesiderati
+    return channel.send({
+      content: custom,
+      allowedMentions: { parse: [] }
+    }).catch(err => log.err('custom command send', err));
+  }
 
   const cd = checkCooldown(member.id, commandName);
   if (cd.onCooldown) {
