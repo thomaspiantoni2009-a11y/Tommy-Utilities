@@ -50,6 +50,18 @@ function formatDuration(seconds) {
   return `${Math.floor(seconds / 86400)}g`;
 }
 
+// Converte "10m", "1h", "2d", "30s" in millisecondi
+function parseDuration(input) {
+  if (!input) return null;
+  const m = String(input).trim().match(/^(\d+)\s*(s|m|h|d)$/i);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (isNaN(n) || n <= 0) return null;
+  const unit = m[2].toLowerCase();
+  const multipliers = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
+  return n * multipliers[unit];
+}
+
 function getRoles(member, guild) {
   if (!member) return 'N/A';
   return member.roles.cache
@@ -1112,6 +1124,7 @@ function buildHelpEmbed() {
       { name: '📨 Inviti & Ruoli', value: '`/invite` `/giverole` `/removerole`', inline: true },
       { name: '🔒 Canali', value: '`/lock` `/unlock`', inline: true },
       { name: '🎮 Lobby', value: '`/dashboard`', inline: true },
+      { name: '⏰ Reminder', value: '`/remind`', inline: true },
       { name: '🔧 Custom', value: '`/addcmd` `/delcmd` `/listcmd`', inline: true }
     )
     .setFooter({ text: 'Usa /help per rivedere questo messaggio' });
@@ -1425,6 +1438,10 @@ const slashCommands = [
     .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true)),
   new SlashCommandBuilder().setName('listcmd').setDescription('Mostra la lista dei comandi custom'),
 
+  new SlashCommandBuilder().setName('remind').setDescription('Imposta un reminder')
+    .addStringOption(o => o.setName('tempo').setDescription('Es: 10m, 1h, 2d, 30s').setRequired(true))
+    .addStringOption(o => o.setName('testo').setDescription('Cosa ricordare').setRequired(true)),
+
   new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard (crea lobby)'),
 
   new SlashCommandBuilder().setName('invite').setDescription('Invia un invito (1 uso, 60 min)')
@@ -1516,6 +1533,38 @@ const client = new Client({
 });
 clientRef = client;
 
+// ==================== REMINDER SCHEDULER ====================
+// Ogni 30 secondi controlla se ci sono reminder scaduti e li invia
+setInterval(async () => {
+  try {
+    const due = storage.getDueReminders(new Date());
+    for (const r of due) {
+      try {
+        const guild = client.guilds.cache.get(r.guild_id);
+        if (!guild) {
+          storage.deleteReminder(r.id);
+          continue;
+        }
+        const channel = guild.channels.cache.get(r.channel_id);
+        if (!channel) {
+          storage.deleteReminder(r.id);
+          continue;
+        }
+        await channel.send({
+          content: `<@${r.user_id}> ⏰ **Reminder:** ${r.content}`,
+          allowedMentions: { users: [r.user_id], roles: [] }
+        }).catch(err => log.warn(`Reminder send fallito: ${err.message}`));
+        storage.deleteReminder(r.id);
+      } catch (err) {
+        log.err('reminder loop', err);
+        storage.deleteReminder(r.id);
+      }
+    }
+  } catch (err) {
+    log.err('reminder scheduler', err);
+  }
+}, 30 * 1000).unref?.();
+
 // ==================== PREFIX COMMANDS ====================
 async function handlePrefixCommand(message) {
   if (message.author.bot) return;
@@ -1539,19 +1588,18 @@ async function handlePrefixCommand(message) {
     // 1) Cancella il messaggio dell'utente (se possibile)
     if (channel.permissionsFor(guild.members.me)?.has(PermissionsBitField.Flags.ManageMessages)) {
       await message.delete().catch(err => {
-        // Non è un errore grave se fallisce (es. messaggio già cancellato)
         log.warn(`Impossibile cancellare messaggio custom command: ${err.message}`);
       });
     }
 
- return channel.send({
-  content: custom,
-  allowedMentions: {
-    parse: ['users', 'roles', 'everyone'],
-    roles: [],                 // non pingare ruoli
-    repliedUser: false         // non pingare chi ha scritto il comando
-  }
-}).catch(err => log.err('custom command send', err));
+    // 2) Invia la risposta con allowedMentions per pingare utenti ed everyone
+    return channel.send({
+      content: custom,
+      allowedMentions: {
+        parse: ['users', 'everyone'],
+        repliedUser: false
+      }
+    }).catch(err => log.err('custom command send', err));
   }
 
   const cd = checkCooldown(member.id, commandName);
@@ -1697,7 +1745,6 @@ async function handlePrefixCommand(message) {
           return message.reply({ embeds: [EmbedManager.info('Comandi Custom', 'Nessun comando custom salvato.')] });
         }
 
-        // Ordina alfabeticamente e mostra i primi 50 per non sforare i 4096 caratteri
         const list = names.sort().slice(0, 50).map(n => `\`-${n}\``).join(', ');
         const extra = names.length > 50 ? `\n\n*...e altri ${names.length - 50} comandi*` : '';
 
@@ -1708,6 +1755,38 @@ async function handlePrefixCommand(message) {
           )]
         });
       }
+
+      case 'remind':
+      case 'reminder': {
+        const timeArg = args[0];
+        const content = args.slice(1).join(' ');
+
+        if (!timeArg || !content) {
+          return message.reply('❌ Uso: `-remind <tempo> <testo>`\nEsempi: `10m`, `1h`, `2d`, `30s`');
+        }
+
+        const ms = parseDuration(timeArg);
+        if (!ms) {
+          return message.reply('❌ Formato tempo non valido. Usa `10m`, `1h`, `2d`, `30s`.');
+        }
+        if (ms < 5000) {
+          return message.reply('❌ Il tempo minimo è 5 secondi.');
+        }
+        if (ms > 30 * 24 * 60 * 60 * 1000) {
+          return message.reply('❌ Il tempo massimo è 30 giorni.');
+        }
+        if (content.length > 500) {
+          return message.reply('❌ Il testo è troppo lungo (max 500 caratteri).');
+        }
+
+        const remindAt = new Date(Date.now() + ms);
+        const id = storage.addReminder(member.id, guild.id, channel.id, content, remindAt);
+
+        return message.reply({
+          embeds: [EmbedManager.success('Reminder Impostato', `Ti ricorderò **${content}** <t:${Math.floor(remindAt.getTime() / 1000)}:R> (ID: #${id})`)]
+        });
+      }
+
       case 'ticketpanel': {
         if (!isAdmin(member))
           return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
@@ -2182,6 +2261,32 @@ async function handleSlashCommand(interaction) {
       return interaction.reply({
         embeds: [EmbedManager.info(`Comandi Custom (${names.length})`, `${list}${extra}`)],
         ephemeral: true
+      });
+    }
+
+    case 'remind': {
+      const timeArg = interaction.options.getString('tempo');
+      const content = interaction.options.getString('testo');
+
+      const ms = parseDuration(timeArg);
+      if (!ms) {
+        return safeReply(interaction, { embeds: [EmbedManager.error('Formato non valido', 'Usa `10m`, `1h`, `2d`, `30s`.')], ephemeral: true });
+      }
+      if (ms < 5000) {
+        return safeReply(interaction, { embeds: [EmbedManager.error('Troppo corto', 'Minimo 5 secondi.')], ephemeral: true });
+      }
+      if (ms > 30 * 24 * 60 * 60 * 1000) {
+        return safeReply(interaction, { embeds: [EmbedManager.error('Troppo lungo', 'Massimo 30 giorni.')], ephemeral: true });
+      }
+      if (content.length > 500) {
+        return safeReply(interaction, { embeds: [EmbedManager.error('Testo troppo lungo', 'Max 500 caratteri.')], ephemeral: true });
+      }
+
+      const remindAt = new Date(Date.now() + ms);
+      const id = storage.addReminder(interaction.user.id, interaction.guild.id, interaction.channel.id, content, remindAt);
+
+      return interaction.reply({
+        embeds: [EmbedManager.success('Reminder Impostato', `Ti ricorderò **${content}** <t:${Math.floor(remindAt.getTime() / 1000)}:R> (ID: #${id})`)]
       });
     }
 
