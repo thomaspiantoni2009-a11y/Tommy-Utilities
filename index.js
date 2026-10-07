@@ -1112,7 +1112,7 @@ function buildHelpEmbed() {
       { name: '📨 Inviti & Ruoli', value: '`/invite` `/giverole` `/removerole`', inline: true },
       { name: '🔒 Canali', value: '`/lock` `/unlock`', inline: true },
       { name: '🎮 Lobby', value: '`/dashboard`', inline: true },
-      { name: '🔧 Custom', value: '`/addcmd` `/delcmd`', inline: true }
+      { name: '🔧 Custom', value: '`/addcmd` `/delcmd` `/listcmd`', inline: true }
     )
     .setFooter({ text: 'Usa /help per rivedere questo messaggio' });
 }
@@ -1423,6 +1423,7 @@ const slashCommands = [
     .addStringOption(o => o.setName('risposta').setDescription('Risposta').setRequired(true)),
   new SlashCommandBuilder().setName('delcmd').setDescription('Elimina comando custom')
     .addStringOption(o => o.setName('nome').setDescription('Nome').setRequired(true)),
+  new SlashCommandBuilder().setName('listcmd').setDescription('Mostra la lista dei comandi custom'),
 
   new SlashCommandBuilder().setName('dashboard').setDescription('Mostra dashboard (crea lobby)'),
 
@@ -1680,6 +1681,29 @@ async function handlePrefixCommand(message) {
         if (!storage.deleteCommand(name))
           return message.reply({ embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)] });
         return message.reply({ embeds: [EmbedManager.success('Comando Eliminato', `"${name}" rimosso.`)] });
+      }
+      case 'listcmd':
+      case 'cmds': {
+        if (!hasStaffOrAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')] });
+
+        const cmds = storage.loadCommands();
+        const names = Object.keys(cmds);
+
+        if (!names.length) {
+          return message.reply({ embeds: [EmbedManager.info('Comandi Custom', 'Nessun comando custom salvato.')] });
+        }
+
+        // Ordina alfabeticamente e mostra i primi 50 per non sforare i 4096 caratteri
+        const list = names.sort().slice(0, 50).map(n => `\`-${n}\``).join(', ');
+        const extra = names.length > 50 ? `\n\n*...e altri ${names.length - 50} comandi*` : '';
+
+        return message.reply({
+          embeds: [EmbedManager.info(
+            `Comandi Custom (${names.length})`,
+            `${list}${extra}`
+          )]
+        });
       }
       case 'ticketpanel': {
         if (!isAdmin(member))
@@ -2137,6 +2161,25 @@ async function handleSlashCommand(interaction) {
       if (!storage.deleteCommand(name))
         return safeReply(interaction, { embeds: [EmbedManager.error('Non Trovato', `"${name}" non esiste.`)], ephemeral: true });
       return interaction.reply({ embeds: [EmbedManager.success('Comando Eliminato', `"${name}" rimosso.`)], ephemeral: true });
+    }
+    case 'listcmd': {
+      if (!hasStaffOrAdmin(member))
+        return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
+
+      const cmds = storage.loadCommands();
+      const names = Object.keys(cmds);
+
+      if (!names.length) {
+        return interaction.reply({ embeds: [EmbedManager.info('Comandi Custom', 'Nessun comando custom salvato.')], ephemeral: true });
+      }
+
+      const list = names.sort().slice(0, 50).map(n => `\`-${n}\``).join(', ');
+      const extra = names.length > 50 ? `\n\n*...e altri ${names.length - 50} comandi*` : '';
+
+      return interaction.reply({
+        embeds: [EmbedManager.info(`Comandi Custom (${names.length})`, `${list}${extra}`)],
+        ephemeral: true
+      });
     }
 
     case 'dashboard': {
