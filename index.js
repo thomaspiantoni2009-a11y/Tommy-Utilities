@@ -1485,40 +1485,17 @@ async function registerSlashCommands(clientId, token) {
   }
 
   try {
-    log.info('🧹 Pulizia comandi esistenti...');
-
-    try {
-      await rest.put(Routes.applicationCommands(clientId), { body: [] });
-      log.ok('✅ Comandi globali cancellati');
-    } catch (err) {
-      log.warn(`Cancellazione globali fallita: ${err.message}`);
-    }
-
     if (GUILD_ID) {
-      try {
-        await rest.put(Routes.applicationGuildCommands(clientId, GUILD_ID), { body: [] });
-        log.ok(`✅ Comandi guild ${GUILD_ID} cancellati`);
-      } catch (err) {
-        log.warn(`Cancellazione guild fallita: ${err.message}`);
-      }
-    }
+      // Rimuove solo i comandi globali (evita doppioni), poi sovrascrive quelli della guild
+      await rest.put(Routes.applicationCommands(clientId), { body: [] }).catch(err =>
+        log.warn(`Cancellazione globali fallita: ${err.message}`));
 
-    log.info('⏳ Attesa 2 secondi...');
-    await new Promise(r => setTimeout(r, 2000));
-
-    if (GUILD_ID) {
       log.info(`Registrazione ISTANTANEA sul server ${GUILD_ID}...`);
-      await rest.put(
-        Routes.applicationGuildCommands(clientId, GUILD_ID),
-        { body: validCommands }
-      );
+      await rest.put(Routes.applicationGuildCommands(clientId, GUILD_ID), { body: validCommands });
       log.ok(`✅ ${validCommands.length} comandi registrati ISTANTANEAMENTE su guild ${GUILD_ID}`);
     } else {
       log.info('Registrazione globale (può richiedere fino a 1 ora)...');
-      await rest.put(
-        Routes.applicationCommands(clientId),
-        { body: validCommands }
-      );
+      await rest.put(Routes.applicationCommands(clientId), { body: validCommands });
       log.ok(`✅ ${validCommands.length} comandi registrati globalmente`);
     }
   } catch (err) {
