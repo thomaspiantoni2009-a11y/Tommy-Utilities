@@ -2032,6 +2032,83 @@ async function handlePrefixCommand(message) {
           ].join('\n'))]
         });
       }
+
+      case 'welcome': {
+        if (!isAdmin(member))
+          return message.reply({ embeds: [EmbedManager.error('Accesso Negato', 'Solo Admin.')] });
+
+        const sub = args.shift()?.toLowerCase();
+        const gid = guild.id;
+        const fill = (t, u) => t
+          .replace(/{user}/g, u.toString())
+          .replace(/{username}/g, u.username)
+          .replace(/{server}/g, guild.name)
+          .replace(/{memberCount}/g, guild.memberCount);
+
+        // &welcome channel <#canale o ID>
+        if (sub === 'channel') {
+          const raw = args[0] || '';
+          const mm = raw.match(/^<#(\d{17,20})>$/);
+          const chId = mm ? mm[1] : (/^\d{17,20}$/.test(raw) ? raw : null);
+          const ch = chId ? guild.channels.cache.get(chId) : null;
+          if (!ch || ch.type !== ChannelType.GuildText)
+            return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `&welcome channel <#canale o ID>` (canale di testo)')] });
+          storage.setWelcomeConfig(gid, { channelId: ch.id, message: null, embedEnabled: undefined });
+          return message.reply({ embeds: [EmbedManager.success('Canale Impostato', `Benvenuto in ${ch}`)] });
+        }
+
+        // &welcome message <testo>
+        if (sub === 'message') {
+          const testo = args.join(' ').trim();
+          if (!testo)
+            return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `&welcome message <testo>`\nUsa `{user}`, `{username}`, `{server}`, `{memberCount}`')] });
+          storage.setWelcomeConfig(gid, { channelId: null, message: testo, embedEnabled: undefined });
+          return message.reply({ embeds: [EmbedManager.success('Messaggio Impostato', `**Anteprima:**\n\n${fill(testo, message.author)}`)] });
+        }
+
+        // &welcome toggle
+        if (sub === 'toggle') {
+          const current = storage.getWelcomeConfig(gid);
+          const newVal = !(current?.embed_enabled);
+          storage.setWelcomeConfig(gid, { channelId: null, message: null, embedEnabled: newVal });
+          return message.reply({ embeds: [EmbedManager.success('Formato Cambiato', newVal ? 'Ora uso **embed**' : 'Ora uso **testo semplice**')] });
+        }
+
+        // &welcome test
+        if (sub === 'test') {
+          const config = storage.getWelcomeConfig(gid);
+          if (!config || !config.channel_id)
+            return message.reply({ embeds: [EmbedManager.error('Non Configurato', 'Imposta prima il canale con `&welcome channel <#canale>`')] });
+          const text = fill(config.message || 'Benvenuto {user} in {server}!', message.author);
+          if (config.embed_enabled) {
+            const embed = new EmbedBuilder()
+              .setTitle('👋 Benvenuto!')
+              .setDescription(text)
+              .setColor(0x00FF00)
+              .setThumbnail(message.author.displayAvatarURL({ dynamic: true }))
+              .setFooter({ text: `Sei il membro #${guild.memberCount}` })
+              .setTimestamp();
+            return message.reply({ embeds: [embed] });
+          }
+          return message.reply({ content: text, allowedMentions: { parse: [], repliedUser: false } });
+        }
+
+        // &welcome disable
+        if (sub === 'disable' || sub === 'off') {
+          storage.disableWelcome(gid);
+          return message.reply({ embeds: [EmbedManager.warning('Benvenuto Disattivato', 'Il sistema di benvenuto è disattivato. Riattivalo con `&welcome channel <#canale>`.')] });
+        }
+
+        return message.reply({
+          embeds: [EmbedManager.info('Welcome', [
+            '`&welcome channel <#canale o ID>` — Imposta il canale',
+            '`&welcome message <testo>` — Imposta il messaggio',
+            '`&welcome toggle` — Embed / testo semplice',
+            '`&welcome test` — Anteprima',
+            '`&welcome disable` — Disattiva'
+          ].join('\n'))]
+        });
+      }
     }
   } catch (err) {
     log.err('handlePrefixCommand', err);
