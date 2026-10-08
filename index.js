@@ -1470,7 +1470,9 @@ const slashCommands = [
 
 // ==================== REGISTRAZIONE COMANDI ====================
 async function registerSlashCommands(clientId, token) {
-  const rest = new REST({ version: '10' }).setToken(token);
+  const rest = new REST({ version: '10', timeout: 30000 }).setToken(token);
+  rest.on('rateLimited', (info) =>
+    log.warn(`Rate limit Discord: ${info.method} ${info.route}, riprovo tra ${Math.ceil(info.timeToReset / 1000)}s`));
 
   log.info(`Preparazione registrazione ${slashCommands.length} comandi...`);
 
