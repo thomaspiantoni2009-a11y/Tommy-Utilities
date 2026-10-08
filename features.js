@@ -5,15 +5,12 @@
 //   - slashCommands: array di SlashCommandBuilder (opzionale)
 //   - handleSlash(interaction, ctx): handler slash (opzionale)
 //   - handleButton(interaction, ctx): handler bottoni (opzionale)
-//   - handlePrefix(message, args, commandName, ctx): handler prefix (opzionale)
+// NB: index.js al momento NON chiama handlePrefix, quindi non è supportato.
 
 const {
   SlashCommandBuilder,
   ChannelType,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
+  EmbedBuilder
 } = require('discord.js');
 
 // ==================== FEATURE 1 — BENVENUTO ====================
@@ -23,6 +20,9 @@ const welcomeFeature = {
   setup({ client, storage, log }) {
     client.on('guildMemberAdd', async member => {
       try {
+        // FIX: gli utenti in blacklist vengono kickati da index.js, niente messaggio di benvenuto.
+        if (storage.isBlacklisted(member.user.id)) return;
+
         const config = storage.getWelcomeConfig(member.guild.id);
         if (!config || !config.channel_id) return;
 
@@ -174,10 +174,10 @@ const welcomeFeature = {
 
     // /welcome disable
     if (sub === 'disable') {
-      // Disattiviamo solo embed_enabled, lasciando canale e messaggio invariati.
-      storage.setWelcomeConfig(gid, { channelId: null, message: null, embedEnabled: false });
+      // FIX: azzera il canale (il listener esce se channel_id è NULL). Messaggio e formato restano salvati.
+      storage.disableWelcome(gid);
       return safeReply(interaction, {
-        embeds: [new EmbedBuilder().setTitle('✅ Benvenuto Disattivato').setDescription('Il sistema di benvenuto è ora in pausa.').setColor(0xFFA500)],
+        embeds: [new EmbedBuilder().setTitle('✅ Benvenuto Disattivato').setDescription('Il sistema di benvenuto è ora disattivato. Riattivalo con `/welcome channel`.').setColor(0xFFA500)],
         ephemeral: true
       });
     }
