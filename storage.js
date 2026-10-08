@@ -205,17 +205,29 @@ class StorageService {
     this._countNotes = this.db.prepare('SELECT COUNT(*) as c FROM member_notes WHERE guild_id = ?');
 
     // Welcome
-    // embed_enabled usa COALESCE per non sovrascrivere se non specificato.
-    this._getWelcome = this.db.prepare('SELECT * FROM welcome_config WHERE guild_id = ?');
+    // FIX: embed_enabled viene letto con COALESCE(..., 1) così le righe con NULL
+    //      (create prima della correzione) risultano comunque in formato embed.
+    this._getWelcome = this.db.prepare(`
+      SELECT guild_id, channel_id, message,
+             COALESCE(embed_enabled, 1) AS embed_enabled,
+             updated_at
+      FROM welcome_config WHERE guild_id = ?
+    `);
+    // FIX: in INSERT il valore NULL esplicito non attivava il DEFAULT 1 → ora COALESCE(@embedEnabled, 1).
+    //      In UPDATE si usa il parametro (non excluded.*) per mantenere il valore esistente se non specificato.
     this._setWelcome = this.db.prepare(`
       INSERT INTO welcome_config (guild_id, channel_id, message, embed_enabled, updated_at)
-      VALUES (@guildId, @channelId, @message, @embedEnabled, @updatedAt)
+      VALUES (@guildId, @channelId, @message, COALESCE(@embedEnabled, 1), @updatedAt)
       ON CONFLICT(guild_id) DO UPDATE SET
-        channel_id = COALESCE(excluded.channel_id, channel_id),
-        message = COALESCE(excluded.message, message),
-        embed_enabled = COALESCE(excluded.embed_enabled, embed_enabled),
-        updated_at = excluded.updated_at
+        channel_id = COALESCE(@channelId, channel_id),
+        message = COALESCE(@message, message),
+        embed_enabled = COALESCE(@embedEnabled, embed_enabled),
+        updated_at = @updatedAt
     `);
+    // FIX: /welcome disable deve davvero disattivare il benvenuto (il listener esce se channel_id è NULL).
+    this._disableWelcome = this.db.prepare(
+      'UPDATE welcome_config SET channel_id = NULL, updated_at = ? WHERE guild_id = ?'
+    );
 
     // Reaction Roles
     this._rrInsert = this.db.prepare(`
@@ -280,7 +292,7 @@ class StorageService {
       UPDATE cases SET reason = COALESCE(@reason, reason),
                        status = COALESCE(@status, status),
                        updated_at = @now
-      WHERE id = ? AND guild_id = ?
+      WHERE id = @id AND guild_id = @guildId
     `);
     this._caseDelete = this.db.prepare('DELETE FROM cases WHERE id = ? AND guild_id = ?');
 
@@ -399,10 +411,13 @@ class StorageService {
       guildId,
       channelId: channelId || null,
       message: message || null,
-      // Se embedEnabled non è specificato (undefined), passa null → COALESCE mantiene il valore esistente
+      // Se embedEnabled non è specificato (undefined), passa null → viene mantenuto il valore esistente
       embedEnabled: (embedEnabled === undefined) ? null : (embedEnabled === false ? 0 : 1),
       updatedAt: new Date().toISOString()
     });
+  }
+  disableWelcome(guildId) {
+    return this._disableWelcome.run(new Date().toISOString(), guildId).changes > 0;
   }
 
   // ===== Reaction Roles =====
@@ -461,11 +476,14 @@ class StorageService {
   getCase(guildId, id) { return this._caseGet.get(id, guildId) || null; }
   getCasesForUser(guildId, userId) { return this._caseByUser.all(guildId, userId); }
   updateCase(guildId, id, { reason, status }) {
+    // FIX: tutti i parametri sono nominati (prima si mescolavano named e posizionali)
     this._caseUpdate.run({
+      id,
+      guildId,
       reason: reason || null,
       status: status || null,
       now: new Date().toISOString()
-    }, id, guildId);
+    });
   }
   deleteCase(guildId, id) { return this._caseDelete.run(id, guildId).changes > 0; }
 
