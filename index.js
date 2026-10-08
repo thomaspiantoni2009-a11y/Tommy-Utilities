@@ -656,6 +656,11 @@ async function addBlacklist(source, targetUser, reason, moderator, isSlash) {
     }, isSlash);
   }
 
+  // FIX: il ban su tutti i server può superare i 3 secondi → defer dopo i controlli (gli errori restano ephemeral).
+  if (isSlash && !source.deferred && !source.replied) {
+    await source.deferReply().catch(err => log.err('addBlacklist deferReply', err));
+  }
+
   storage.addToBlacklist(
     targetUser.id, targetUser.username, reason,
     moderator.id, moderator.tag ?? moderator.username
@@ -712,6 +717,11 @@ async function removeBlacklist(source, targetUser, moderator, isSlash) {
       embeds: [EmbedManager.error('Non in Blacklist', `${targetUser.username} non è nella blacklist globale.`)],
       ephemeral: isSlash
     }, isSlash);
+  }
+
+  // FIX: lo sban su tutti i server può superare i 3 secondi → defer dopo il controllo.
+  if (isSlash && !source.deferred && !source.replied) {
+    await source.deferReply().catch(err => log.err('removeBlacklist deferReply', err));
   }
 
   storage.removeFromBlacklist(targetUser.id);
@@ -1119,7 +1129,7 @@ function buildHelpEmbed() {
       { name: '🧹 Purge', value: '`/purge`', inline: true },
       { name: '🚫 Blacklist', value: '`/blacklist add|remove|list|check`', inline: true },
       { name: '📝 Note', value: '`/note add|list|remove`', inline: true },
-      { name: '⚙️ Config', value: '`/autorole set|clear`', inline: true },
+      { name: '⚙️ Config', value: '`/autorole set|clear`\n`/welcome channel|message|toggle|test|disable`', inline: true },
       { name: '👤 Utente', value: '`/userinfo` `/roles` `/stats` `/ping` `/uptime`', inline: true },
       { name: '📨 Inviti & Ruoli', value: '`/invite` `/giverole` `/removerole`', inline: true },
       { name: '🔒 Canali', value: '`/lock` `/unlock`', inline: true },
@@ -1809,7 +1819,8 @@ async function handlePrefixCommand(message) {
           if (id) { try { user = await client.users.fetch(id); } catch {} }
         }
         if (!user) user = message.author;
-        const m = guild.members.cache.get(user.id);
+        // FIX: fetch invece della sola cache
+        const m = await guild.members.fetch(user.id).catch(() => null);
         return channel.send({
           embeds: [EmbedManager.info(`Info ${user.username}`, `Info su ${user}`)
             .setThumbnail(user.displayAvatarURL({ dynamic: true }))
@@ -1831,7 +1842,8 @@ async function handlePrefixCommand(message) {
           if (id) { try { target = await client.users.fetch(id); } catch {} }
         }
         if (!target) return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-warn <@utente o ID> [motivo]`')] });
-        const m = guild.members.cache.get(target.id);
+        // FIX: fetch invece della sola cache
+        const m = await guild.members.fetch(target.id).catch(() => null);
         if (!m) return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non nel server.')] });
         if (target.id === message.author.id) return message.reply({ embeds: [EmbedManager.error('Errore', 'Non puoi warnare te stesso.')] });
         if (m.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply({ embeds: [EmbedManager.error('Errore', 'Non puoi warnare un admin.')] });
@@ -1862,13 +1874,17 @@ async function handlePrefixCommand(message) {
           return message.reply({ embeds: [EmbedManager.error('Sintassi', 'Uso: `-timeout <@utente o ID> <secondi> [motivo]`')] });
         if (seconds < 1 || seconds > 2419200)
           return message.reply({ embeds: [EmbedManager.error('Durata non valida', 'Secondi tra 1 e 2419200 (28 giorni).')] });
-        const m = guild.members.cache.get(target.id);
+        // FIX: fetch invece della sola cache
+        const m = await guild.members.fetch(target.id).catch(() => null);
         if (!m) return message.reply({ embeds: [EmbedManager.error('Errore', 'Utente non nel server.')] });
         if (target.id === message.author.id) return message.reply({ embeds: [EmbedManager.error('Errore', 'Non puoi timeout te stesso.')] });
         if (m.permissions.has(PermissionsBitField.Flags.Administrator)) return message.reply({ embeds: [EmbedManager.error('Errore', 'Non puoi timeout un admin.')] });
         const bot = guild.members.me;
         if (!bot.permissions.has(PermissionsBitField.Flags.ModerateMembers))
           return message.reply({ embeds: [EmbedManager.error('Permessi', 'Manca "Modera Membri".')] });
+        // FIX: controllo gerarchia esplicito
+        if (!m.moderatable)
+          return message.reply({ embeds: [EmbedManager.error('Errore', 'Non posso timeout questo utente.')] });
         const reason = args.slice(2).join(' ') || 'Nessun motivo specificato';
         try { await m.timeout(seconds * 1000, reason); }
         catch { return message.reply({ embeds: [EmbedManager.error('Errore', 'Non posso timeout questo utente.')] }); }
@@ -2106,7 +2122,8 @@ async function handleSlashCommand(interaction) {
 
     case 'userinfo': {
       const user = interaction.options.getUser('utente') || interaction.user;
-      const m = guild.members.cache.get(user.id);
+      // FIX: fetch invece della sola cache
+      const m = await guild.members.fetch(user.id).catch(() => null);
       return interaction.reply({
         embeds: [EmbedManager.info(`Info ${user.username}`, `Info su ${user}`)
           .setThumbnail(user.displayAvatarURL({ dynamic: true }))
@@ -2130,7 +2147,8 @@ async function handleSlashCommand(interaction) {
         return safeReply(interaction, { embeds: [EmbedManager.error('Accesso Negato', 'Serve il ruolo Staff o superiore.')], ephemeral: true });
       const target = interaction.options.getUser('utente');
       const reason = interaction.options.getString('motivo') || 'Nessun motivo specificato';
-      const m = guild.members.cache.get(target.id);
+      // FIX: fetch invece della sola cache
+      const m = await guild.members.fetch(target.id).catch(() => null);
       if (!m) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Utente non nel server.')], ephemeral: true });
       if (target.id === interaction.user.id) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non puoi warnare te stesso.')], ephemeral: true });
       if (m.permissions.has(PermissionsBitField.Flags.Administrator)) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non puoi warnare un admin.')], ephemeral: true });
@@ -2156,13 +2174,17 @@ async function handleSlashCommand(interaction) {
       const reason = interaction.options.getString('motivo') || 'Nessun motivo specificato';
       if (seconds < 1 || seconds > 2419200)
         return safeReply(interaction, { embeds: [EmbedManager.error('Durata non valida', 'Tra 1 e 2419200 secondi.')], ephemeral: true });
-      const m = guild.members.cache.get(target.id);
+      // FIX: fetch invece della sola cache
+      const m = await guild.members.fetch(target.id).catch(() => null);
       if (!m) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Utente non nel server.')], ephemeral: true });
       if (target.id === interaction.user.id) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non puoi timeout te stesso.')], ephemeral: true });
       if (m.permissions.has(PermissionsBitField.Flags.Administrator)) return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non puoi timeout un admin.')], ephemeral: true });
       const bot = guild.members.me;
       if (!bot.permissions.has(PermissionsBitField.Flags.ModerateMembers))
         return safeReply(interaction, { embeds: [EmbedManager.error('Permessi', 'Manca "Modera Membri".')], ephemeral: true });
+      // FIX: controllo gerarchia esplicito
+      if (!m.moderatable)
+        return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non posso timeout questo utente.')], ephemeral: true });
       try { await m.timeout(seconds * 1000, reason); }
       catch { return safeReply(interaction, { embeds: [EmbedManager.error('Errore', 'Non posso timeout questo utente.')], ephemeral: true }); }
       const durata = formatDuration(seconds);
